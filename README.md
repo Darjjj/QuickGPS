@@ -7,6 +7,12 @@ A quick GPS for GTA IV. Hold **Tab** for a second and a panel opens in the top-l
 
 Scroll to one and left click. A yellow destination marker appears on the map with a GPS route to it, and a small line in the top-left shows the place, the distance and which way to go ("ahead-left"). The route clears itself when you arrive.
 
+![The QuickGPS menu listing mission givers and the nearest services with distances](docs/menu.jpg)
+
+| Hold Tab: a bar fills, then the menu opens | After picking a destination |
+|---|---|
+| ![The QuickGPS hold bar filling in the top-left corner](docs/hold-to-open.jpg) | ![The route hint "GPS: Little Jacob 756 m behind-left" in the top-left corner](docs/route-hint.jpg) |
+
 ## Controls
 
 | Input | Action |
