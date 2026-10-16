@@ -1,5 +1,7 @@
 # QuickGPS for GTA IV
 
+**Download:** [Nexus Mods](https://www.nexusmods.com/gta4/mods/1568) · [GitHub releases](https://github.com/Darjjj/QuickGPS/releases/latest)
+
 A quick GPS for GTA IV. Hold **Tab** for a second and a panel opens in the top-left corner listing:
 
 - **Mission givers:** every contact on the map (Roman, Little Jacob, Brucie, strangers, assassination jobs and so on), nearest first.
@@ -38,7 +40,7 @@ Niko keeps walking or driving while the menu is open. The game doesn't see your 
 
 1. Back up your saves (`Documents\Rockstar Games\GTA IV\`).
 2. Install ScriptHookDotNet into the folder that holds `GTAIV.exe` (`...\Grand Theft Auto IV\GTAIV\`), following its own readme.
-3. Extract the QuickGPS release zip into that same folder. It puts `QuickGPS.net.dll` and `QuickGPS.ini` in `GTAIV\scripts\`.
+3. Download QuickGPS from [Nexus Mods](https://www.nexusmods.com/gta4/mods/1568) or the [GitHub releases](https://github.com/Darjjj/QuickGPS/releases/latest) and extract the zip into that same folder. It puts `QuickGPS.net.dll` and `QuickGPS.ini` in `GTAIV\scripts\`.
 4. Start the game, load a save and hold Tab.
 
 If nothing shows up, check `ScriptHookDotNet.log` in the GTAIV folder.
