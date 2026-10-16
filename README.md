@@ -72,7 +72,7 @@ The source is `QuickGPS\src\QuickGPS.cs`. Run `QuickGPS\build.cmd` (optionally p
 ## Credits
 
 - ScriptHookDotNet by HazardX, with Complete Edition support by Tomasak; GTA IV Script Hook by Aru; `aCompleteEditionHook.asi` by LMS.
-- Mission-giver and random-character locations and neighbourhood names come from [Map Genie's GTA IV map](https://mapgenie.io/grand-theft-auto-4/maps/liberty-city), converted to game coordinates (`QuickGPS/tools/`).
+- Mission-giver, random-character and hospital locations and neighbourhood names come from [Map Genie's GTA IV map](https://mapgenie.io/grand-theft-auto-4/maps/liberty-city), converted to game coordinates (`QuickGPS/tools/`).
 - QuickGPS was written with the help of Claude (Anthropic's AI assistant) and tested in game by Darj.
 
 ## License

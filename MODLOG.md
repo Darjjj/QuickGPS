@@ -146,4 +146,8 @@ ScriptHookDotNet (C#), **Tomasak's CE fork** (github.com/Tomasak/gta4_scripthook
 - Rumble: XInputSetState from xinput9_1_0 on the pad that pressed A, 120 ms (game may override).
 - Type markers: coloured square per row by section (real radar icons would mean redistributing game art).
 - Tests: controller 21+10 checks (old "unrelated button" check now uses Y since D-pad right is used), filter install,
-  7 v1.3 logic checks (areas, suggestions, ordering, saved-place round trip), earlier suites unchanged. Not in game yet.
+  7 v1.3 logic checks (areas, suggestions, ordering, saved-place round trip), earlier suites unchanged.
+- In-game test 1: hospital suggestion never showed. GTA IV has no hospital blips (F9 dumps have none), so
+  KnownPlaces.Hospitals (8, Map Genie category 2047, tag H) are added as Hospital services at the player's Z.
+- In-game test 1 also reported B (melee) not reaching the game with the menu closed; not reproducible in the filter
+  test and fine in test 2 with BlockControllerFromGame=true. In-game test 2: everything worked.
