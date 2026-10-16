@@ -132,7 +132,7 @@ ScriptHookDotNet (C#), **Tomasak's CE fork** (github.com/Tomasak/gta4_scripthook
   Person_Unknown/Misc_Boss -> MissionGivers; otherwise the generic label stays. Table: 70 giver places, 31 random, 66 areas.
   Real-data check: the "Stranger (male)" at (863,-558) from the first dump resolves to Brian Meech (early-game encounter).
 
-## v1.3.0 work (2026-10-16), not released yet
+## v1.3.0 work (2026-10-16), released 2026-10-16
 - Smart suggestions (SUGGESTED section): nearest Pay 'n' Spray when Player.WantedLevel > 0, nearest hospital when
   Ped.Health (SHDN returns raw-100, so 0-100) < LowHealth (40).
 - ServicesPerKind (3) nearest of each service; repeated names in missions and services get " (area)".
