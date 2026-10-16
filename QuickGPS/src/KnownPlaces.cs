@@ -113,6 +113,18 @@ namespace QuickGPS
             new KnownPlace("ANY", "Sara", 349f, -468f),
         };
 
+        // Hospitals. The game doesn't put them on the map, so QuickGPS knows them itself.
+        public static readonly KnownPlace[] Hospitals = new KnownPlace[] {
+            new KnownPlace(null, "Hospital", -1528f, 385f),
+            new KnownPlace(null, "Hospital", -1310f, 1291f),
+            new KnownPlace(null, "Hospital", -397f, 1279f),
+            new KnownPlace(null, "Hospital", -206f, -562f),
+            new KnownPlace(null, "Hospital", 100f, 153f),
+            new KnownPlace(null, "Hospital", 980f, 1812f),
+            new KnownPlace(null, "Hospital", 1203f, 202f),
+            new KnownPlace(null, "Hospital", 1255f, 480f),
+        };
+
         // Neighbourhood label positions, for naming the area a contact is in.
         public static readonly KnownPlace[] Areas = new KnownPlace[] {
             new KnownPlace(null, "Acter", -1674f, 315f),

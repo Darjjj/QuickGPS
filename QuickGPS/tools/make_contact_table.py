@@ -85,7 +85,7 @@ def main():
     if max_err > 25:
         raise SystemExit("fit too loose, not writing")
 
-    areas, givers, randoms = [], [], []
+    areas, givers, randoms, hospitals = [], [], [], []
     with open(os.path.join(HERE, "mapgenie_points.txt"), encoding="utf-8") as f:
         for line in f:
             if line.startswith("#") or not line.strip():
@@ -96,6 +96,8 @@ def main():
                 name = NAME_FIXES.get(name, name)
                 if tag == "N":
                     areas.append((name, x, y))
+                elif tag == "H":
+                    hospitals.append((name, x, y))
                 elif tag == "R":
                     randoms.append(("ANY", name, x, y))
                 else:
@@ -122,6 +124,11 @@ def main():
               "        public static readonly KnownPlace[] RandomCharacters = new KnownPlace[] {"]
     for ep, name, x, y in random_places:
         lines.append('            new KnownPlace("%s", "%s", %.0ff, %.0ff),' % (ep, name, x, y))
+    lines += ["        };", "",
+              "        // Hospitals. The game doesn't put them on the map, so QuickGPS knows them itself.",
+              "        public static readonly KnownPlace[] Hospitals = new KnownPlace[] {"]
+    for name, x, y in sorted(hospitals, key=lambda h: (h[1], h[2])):
+        lines.append('            new KnownPlace(null, "%s", %.0ff, %.0ff),' % (name, x, y))
     lines += ["        };", "", "        // Neighbourhood label positions, for naming the area a contact is in.",
               "        public static readonly KnownPlace[] Areas = new KnownPlace[] {"]
     for name, x, y in areas:
@@ -132,8 +139,8 @@ def main():
               "        {", "            Episode = episode; Name = name; X = x; Y = y;", "        }", "    }", "}", ""]
     with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
-    print("wrote %d mission-giver places, %d random-character places and %d areas to %s"
-          % (len(places), len(random_places), len(areas), os.path.relpath(OUT)))
+    print("wrote %d mission-giver places, %d random-character places, %d hospitals and %d areas to %s"
+          % (len(places), len(random_places), len(hospitals), len(areas), os.path.relpath(OUT)))
 
 
 if __name__ == "__main__":

@@ -805,6 +805,17 @@ namespace QuickGPS
                 }
             }
 
+            // The game doesn't put hospitals on the map, so use the known ones (at the player's height).
+            if (!services.ContainsKey("Hospital"))
+            {
+                List<Entry> kind = services["Hospital"] = new List<Entry>();
+                foreach (KnownPlace h in KnownPlaces.Hospitals)
+                {
+                    Vector3 pos = new Vector3(h.X, h.Y, me.Z);
+                    kind.Add(NewEntry("Hospital", SectionServices, null, pos, Distance(me, pos)));
+                }
+            }
+
             // Keep the nearest few of each kind of service.
             List<Entry> serviceList = new List<Entry>();
             foreach (List<Entry> kind in services.Values)
