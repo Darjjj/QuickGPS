@@ -613,6 +613,7 @@ namespace QuickGPS
         void Rebuild()
         {
             lastFullScan = lastRefresh = Environment.TickCount;
+            currentEpisode = EpisodeName();
 
             Vector3 me = Player.Character.Position;
             List<Entry> missions = new List<Entry>();
@@ -779,6 +780,50 @@ namespace QuickGPS
             return all;
         }
 
+        static string currentEpisode = "GTAIV";
+        const float MissionGiverMatchM = 60.0f;   // Map Genie mission starts are within ~10 m once converted
+
+        // A contact whose icon isn't in the name table (e.g. an Episodes from Liberty City character):
+        // name it after the nearest known mission start for this episode, or else the area it's in.
+        static string UnknownContactLabel(Blip b, int icon)
+        {
+            Vector3 pos;
+            try { pos = b.Position; }
+            catch { return "Contact #" + icon; }
+            if (!PlausiblePosition(pos)) return "Contact #" + icon;
+
+            KnownPlace best = null;
+            float bestD = MissionGiverMatchM;
+            foreach (KnownPlace k in KnownPlaces.MissionGivers)
+            {
+                if (k.Episode != currentEpisode) continue;
+                float d = Distance2D(pos, k.X, k.Y);
+                if (d < bestD) { bestD = d; best = k; }
+            }
+            if (best != null) return best.Name;
+
+            string area = NearestArea(pos);
+            return area != null ? "Contact (" + area + ")" : "Contact #" + icon;
+        }
+
+        static string NearestArea(Vector3 pos)
+        {
+            KnownPlace best = null;
+            float bestD = float.MaxValue;
+            foreach (KnownPlace k in KnownPlaces.Areas)
+            {
+                float d = Distance2D(pos, k.X, k.Y);
+                if (d < bestD) { bestD = d; best = k; }
+            }
+            return best != null ? best.Name : null;
+        }
+
+        static float Distance2D(Vector3 a, float x, float y)
+        {
+            float dx = a.X - x, dy = a.Y - y;
+            return (float)Math.Sqrt(dx * dx + dy * dy);
+        }
+
         static bool Classify(Blip b, out string label, out bool isMission)
         {
             label = null;
@@ -807,7 +852,7 @@ namespace QuickGPS
             catch { return false; }
             if (type == BlipType.Contact)
             {
-                label = "Contact #" + (int)icon;
+                label = UnknownContactLabel(b, (int)icon);
                 isMission = true;
                 return true;
             }
@@ -823,6 +868,7 @@ namespace QuickGPS
                 Vector3 me = Player.Character.Position;
                 List<Blip> blips = ScanAllBlips();
                 string episode = EpisodeName();
+                currentEpisode = episode;
                 System.Text.StringBuilder sb = new System.Text.StringBuilder();
                 const string T = "\t";
                 sb.AppendLine();

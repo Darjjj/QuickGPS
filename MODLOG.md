@@ -123,3 +123,7 @@ ScriptHookDotNet (C#), **Tomasak's CE fork** (github.com/Tomasak/gta4_scripthook
   Fitted affine lat/lng -> game XY on 11 shops from the dumps (max error 11 m; two held-out safehouses 5-9 m).
   Matches: 97 Tony Prince (4 m), 103 Tony Prince (10 m), 106 Jim Fitzgerald (6 m), 101 Billy Grey (47 m; next is
   Stubbs 75 m, who unlocks much later). 110/112 ambiguous between Pool/Arm Wrestling/Cards (26-36 m) -> left unnamed.
+- Automatic naming: tools/mapgenie_points.txt (Map Genie TLAD/TBoGT quest-giver mission starts + 66 neighbourhood labels)
+  -> tools/make_contact_table.py (affine fit, merges a giver's stacked markers within 40 m) -> src/KnownPlaces.cs
+  (25 giver places, 66 areas). Unknown Contact blips: nearest same-episode giver within 60 m, else "Contact (<area>)".
+  build.cmd now compiles src\*.cs in %TEMP%\qgps-build\src. 7 naming checks pass against the stub API.

@@ -52,7 +52,7 @@ If nothing shows up, check `ScriptHookDotNet.log` in the GTAIV folder.
 - GTA IV only draws the GPS route line while you're in a vehicle. On foot, follow the yellow marker on the radar and the direction hint in the top-left.
 - GTA IV has no script function for placing your own map waypoint, and it ignores route requests on the mission scripts' blips, so QuickGPS places its own destination marker instead.
 - Only blips the game has placed are listed. Story contacts appear as they unlock, and some services only appear on the map after certain missions.
-- Contacts from The Lost and Damned and The Ballad of Gay Tony use icons that aren't in the name table, so they show up as "Contact #id".
+- Contacts from The Lost and Damned and The Ballad of Gay Tony are named by where their missions start (Billy Grey, Jim Fitzgerald, Ashley Butler, Tony Prince, Yusuf Amir and so on). A contact that doesn't match a known mission start shows the area it's in, for example "Contact (Acter)".
 - QuickGPS ships precompiled. Don't also put `QuickGPS.cs` in the game's `scripts` folder: it would load twice, and ScriptHookDotNet's on-the-fly compiling of `.cs` scripts can crash the game on 1.2.0.59.
 - Single-player only.
 
@@ -63,6 +63,7 @@ The source is `QuickGPS\src\QuickGPS.cs`. Run `QuickGPS\build.cmd` (optionally p
 ## Credits
 
 - ScriptHookDotNet by HazardX, with Complete Edition support by Tomasak; GTA IV Script Hook by Aru; `aCompleteEditionHook.asi` by LMS.
+- Episode mission-giver locations and neighbourhood names come from [Map Genie's GTA IV map](https://mapgenie.io/grand-theft-auto-4/maps/liberty-city), converted to game coordinates (`QuickGPS/tools/`).
 - QuickGPS was written with the help of Claude (Anthropic's AI assistant) and tested in game by Darj.
 
 ## License

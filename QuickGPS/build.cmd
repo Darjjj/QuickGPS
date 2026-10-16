@@ -1,5 +1,5 @@
 @echo off
-rem Builds scripts\QuickGPS.net.dll from src\QuickGPS.cs.
+rem Builds scripts\QuickGPS.net.dll from src\*.cs.
 rem Usage: build.cmd ["C:\path\to\Grand Theft Auto IV\GTAIV"]
 setlocal
 set "GAME=%~1"
@@ -14,10 +14,12 @@ if not exist "%GAME%\ScriptHookDotNet.asi" (
 )
 if not exist "%B%" mkdir "%B%"
 copy /y "%GAME%\ScriptHookDotNet.asi" "%B%\ScriptHookDotNet.dll" >nul
-copy /y "%~dp0src\QuickGPS.cs" "%B%\QuickGPS.cs" >nul
+if not exist "%B%\src" mkdir "%B%\src"
+del /q "%B%\src\*.cs" 2>nul
+copy /y "%~dp0src\*.cs" "%B%\src\" >nul
 
 pushd "%B%"
-"%CSC%" -nologo -platform:x86 -optimize+ -t:library -out:QuickGPS.net.dll -r:ScriptHookDotNet.dll -r:System.Drawing.dll -r:System.Windows.Forms.dll QuickGPS.cs
+"%CSC%" -nologo -platform:x86 -optimize+ -t:library -out:QuickGPS.net.dll -r:ScriptHookDotNet.dll -r:System.Drawing.dll -r:System.Windows.Forms.dll src\*.cs
 set "ERR=%ERRORLEVEL%"
 popd
 if not "%ERR%"=="0" exit /b %ERR%
