@@ -114,3 +114,12 @@ ScriptHookDotNet (C#), **Tomasak's CE fork** (github.com/Tomasak/gta4_scripthook
 - Fallback if no slot found: poll XInputGetState directly (game sees buttons), footer "[fallback input]", holster.
 - Tests outside game: 21 PadInput.Process checks pass; filter install/call-through/restore on a planted slot passes
   (no controller connected -> 1167 passthrough). NOT yet verified in game (slot discovery is the unknown).
+
+## EFLC contact names (2026-10-16)
+- F9 dumps from TLAD and TBoGT: unknown contact sprites TLAD 101 (-1718,361), 106 (-1838,281); TBoGT 97 (-74,-226),
+  103 (-461,146). Coordinate sprites 110/112 inside the Lost MC clubhouse (activities, not contacts).
+- No public sprite table covers EFLC (GTA Connected + GTAMods wikis and ClonkAndre's enum all stop at 94 BLIP_BASE).
+- Map Genie (mapgenie.io/grand-theft-auto-4) mapData has TLAD/TBoGT mission categories with "Quest Giver" and lat/lng.
+  Fitted affine lat/lng -> game XY on 11 shops from the dumps (max error 11 m; two held-out safehouses 5-9 m).
+  Matches: 97 Tony Prince (4 m), 103 Tony Prince (10 m), 106 Jim Fitzgerald (6 m), 101 Billy Grey (47 m; next is
+  Stubbs 75 m, who unlocks much later). 110/112 ambiguous between Pool/Arm Wrestling/Cards (26-36 m) -> left unnamed.

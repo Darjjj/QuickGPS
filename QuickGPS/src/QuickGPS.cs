@@ -112,6 +112,13 @@ namespace QuickGPS
             MissionLabels[BlipIcon.Misc_Ransom] = "Ransom";
             MissionLabels[BlipIcon.Misc_Revenge] = "Revenge";
 
+            // Episodes from Liberty City icons (beyond the base-game enum). Identified by matching F9 dump
+            // positions against Map Genie's mission-giver locations (conversion error under 11 m).
+            MissionLabels[(BlipIcon)97] = "Tony Prince";     // TBoGT, south Algonquin mission start
+            MissionLabels[(BlipIcon)103] = "Tony Prince";    // TBoGT, Westminster mission start
+            MissionLabels[(BlipIcon)101] = "Billy Grey";     // TLAD, Lost MC clubhouse
+            MissionLabels[(BlipIcon)106] = "Jim Fitzgerald"; // TLAD
+
             ServiceLabels[BlipIcon.Building_BurgerShot] = "Burger Shot";
             ServiceLabels[BlipIcon.Building_CluckinBell] = "Cluckin' Bell";
             ServiceLabels[BlipIcon.Building_Internet] = "Internet Cafe";
