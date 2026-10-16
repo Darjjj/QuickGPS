@@ -30,14 +30,14 @@ using GTA;
 
 [assembly: AssemblyTitle("QuickGPS")]
 [assembly: AssemblyDescription("GTA IV quick GPS menu for mission givers and nearby services")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
 
 namespace QuickGPS
 {
     public class QuickGPS : Script
     {
-        public const string Version = "1.1.0";
+        public const string Version = "1.2.0";
 
         const string SectionMissions = "MISSION GIVERS";
         const string SectionServices = "NEAREST SERVICES";
