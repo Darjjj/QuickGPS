@@ -8,6 +8,8 @@
 //   right click      close the menu
 //   hotkey again     close the menu
 //
+// Controller: hold D-pad left (same hold time) to open, D-pad up/down to move, A to pick, B to close.
+//
 // While the menu is open the clicks and wheel are filtered out of DirectInput so the game
 // never sees them: Niko doesn't shoot, aim or switch weapons.
 //
@@ -28,14 +30,14 @@ using GTA;
 
 [assembly: AssemblyTitle("QuickGPS")]
 [assembly: AssemblyDescription("GTA IV quick GPS menu for mission givers and nearby services")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace QuickGPS
 {
     public class QuickGPS : Script
     {
-        public const string Version = "1.0.0";
+        public const string Version = "1.1.0";
 
         const string SectionMissions = "MISSION GIVERS";
         const string SectionServices = "NEAREST SERVICES";
@@ -179,6 +181,9 @@ namespace QuickGPS
         int wheelAccum;
         int lastFullScan, lastRefresh, lastRouteUpdate;
         MouseBlocker mouse;
+        PadInput pad;
+        bool controllerOn, blockPad;
+        volatile bool lastInputPad;   // footer shows controller hints after controller input
 
         // Menu contents. The tick builds a new MenuView and swaps it in; drawing only reads it.
         List<Entry> entries = new List<Entry>();
@@ -213,6 +218,14 @@ namespace QuickGPS
             showRouteHint = Settings.GetValueBool("ShowRouteHint", "Settings", true);
 
             mouse = new MouseBlocker(selectButton, closeButton);
+
+            controllerOn = Settings.GetValueBool("ControllerSupport", "Settings", true);
+            blockPad = Settings.GetValueBool("BlockControllerFromGame", "Settings", true);
+            if (controllerOn)
+            {
+                pad = new PadInput();
+                pad.HoldMs = holdMs;
+            }
 
             Interval = 0;   // every frame, so input is never missed; the work per frame is kept small
             this.Tick += new EventHandler(OnTick);
@@ -257,9 +270,21 @@ namespace QuickGPS
             }
             hotkeyWasDown = hotkeyDown;
 
+            if (pad != null)
+            {
+                pad.Ping();
+                pad.Update(blockPad);
+                if (pad.TakeOpen() && !menuOpen && !capturingHotkey)
+                {
+                    lastInputPad = true;
+                    OpenMenu();
+                }
+            }
+
             if (menuOpen)
             {
                 HandleMouse();
+                if (menuOpen && pad != null) HandlePad();
                 if (menuOpen)
                 {
                     if (Since(lastFullScan) >= FullScanMs) Rebuild();
@@ -277,6 +302,40 @@ namespace QuickGPS
         bool HookActive()
         {
             return useMouseHook && !mouse.Failed;
+        }
+
+        void HandlePad()
+        {
+            int steps = pad.TakeSteps();
+            bool select = pad.TakeSelect();
+            bool back = pad.TakeBack();
+            if (steps != 0 || select || back) lastInputPad = true;
+
+            if (capturingHotkey)
+            {
+                if (back)
+                {
+                    capturingHotkey = false;
+                    Notify("QuickGPS: hotkey unchanged (" + hotkey + ")");
+                }
+                return;
+            }
+            if (back)
+            {
+                CloseMenu(false);
+                return;
+            }
+            if (select)
+            {
+                int sel = selected;
+                if (sel >= 0 && sel < entries.Count && entries[sel].IsHotkeySetting)
+                    capturingHotkey = true;
+                else
+                    CloseMenu(true);
+                return;
+            }
+            if (steps != 0 && entries.Count > 0)
+                selected = ((selected + steps) % entries.Count + entries.Count) % entries.Count;
         }
 
         void HandleMouse()
@@ -305,6 +364,8 @@ namespace QuickGPS
                 selectWasDown = sDown;
                 closeWasDown = cDown;
             }
+
+            if (wheel != 0 || select || close) lastInputPad = false;
 
             if (capturingHotkey)
             {
@@ -445,6 +506,11 @@ namespace QuickGPS
             {
                 ReadMouseWheel();   // throw away wheel movement from before the menu opened
             }
+            if (pad != null)
+            {
+                pad.ResetCounters();
+                pad.MenuOpen = true;
+            }
             entries = new List<Entry>();   // start at the top, not on last time's selection
             Rebuild();
             menuOpen = true;
@@ -455,7 +521,9 @@ namespace QuickGPS
                 frozeControl = true;
             }
             // Without the filter the clicks reach the game, so put the gun away instead.
-            if (!holstered && (holsterWhileOpen || !HookActive())) Holster();
+            // Without the filters the clicks / buttons reach the game, so put the gun away instead.
+            bool padUnblocked = pad != null && lastInputPad && !pad.Blocking;
+            if (!holstered && (holsterWhileOpen || !HookActive() || padUnblocked)) Holster();
         }
 
         void CloseMenu(bool confirm)
@@ -467,6 +535,11 @@ namespace QuickGPS
             menuOpen = false;
             capturingHotkey = false;
             BeginDrain();
+            if (pad != null)
+            {
+                pad.MenuOpen = false;
+                pad.BeginDrain();
+            }
             if (frozeControl)
             {
                 Player.CanControlCharacter = true;
@@ -928,8 +1001,13 @@ namespace QuickGPS
         // 0..1 while the hotkey is being held to open the menu.
         float HoldProgress()
         {
+            return HoldProgress(holdStart);
+        }
+
+        float HoldProgress(int start)
+        {
             if (holdMs <= 0) return 1.0f;
-            return Math.Min(1.0f, Since(holdStart) / (float)holdMs);
+            return Math.Min(1.0f, Since(start) / (float)holdMs);
         }
 
         void OnDraw(object sender, GraphicsEventArgs e)
@@ -942,14 +1020,18 @@ namespace QuickGPS
         // Small filling bar in the top-left while the hotkey is held (not shown for quick taps).
         bool DrawHoldBar(GTA.Graphics g)
         {
-            if (!hotkeyWasDown || holdUsed || holdMs <= 0 || Since(holdStart) < 150) return false;
+            int start;
+            if (hotkeyWasDown && !holdUsed) start = holdStart;
+            else if (this.pad != null && this.pad.HoldStart != 0) start = this.pad.HoldStart;
+            else return false;
+            if (holdMs <= 0 || Since(start) < 150) return false;
 
             float s = BeginDraw(g);
             float x = 24.0f * s, y = 24.0f * s, w = 220.0f * s, h = 40.0f * s, pad = 10.0f * s;
             float barH = 6.0f * s;
             g.DrawRectangle(x + w / 2, y + h / 2, w, h, Color.FromArgb(170, 0, 0, 0));
             g.DrawText("QUICK GPS", x + pad, y + 4.0f * s, Accent, hintFont);
-            float fill = (w - pad * 2) * HoldProgress();
+            float fill = (w - pad * 2) * HoldProgress(start);
             g.DrawRectangle(x + w / 2, y + h - pad, w - pad * 2, barH, Color.FromArgb(200, 60, 60, 60));
             if (fill > 0.5f)
                 g.DrawRectangle(x + pad + fill / 2, y + h - pad, fill, barH, Accent);
@@ -1026,10 +1108,16 @@ namespace QuickGPS
             if (first + shown < count)
                 g.DrawText("v", x + w - pad * 2, cy - 4.0f * s, Color.Gray, font);
 
-            g.DrawText(HookActive() ? FooterText : FooterText + "   [fallback input]", x + pad, cy + pad / 2, HintColor, hintFont);
+            string footer;
+            if (lastInputPad && this.pad != null)
+                footer = this.pad.Blocking ? PadFooterText : PadFooterText + "   [fallback input]";
+            else
+                footer = HookActive() ? FooterText : FooterText + "   [fallback input]";
+            g.DrawText(footer, x + pad, cy + pad / 2, HintColor, hintFont);
         }
 
         const string FooterText = "Scroll: select   Left click: go   Right click: close";
+        const string PadFooterText = "D-pad: select   A: go   B: close";
     }
 
     // Hides the mouse buttons and wheel from the game while the menu is open.
@@ -1361,6 +1449,345 @@ namespace QuickGPS
                 }
             }
             return hr;
+        }
+    }
+
+    // Controller input for the menu: hold D-pad left to open, D-pad up/down to move, A to pick, B to close.
+    //
+    // GTA IV looks up XInputGetState in xinput9_1_0.dll at runtime and keeps the address in a variable
+    // inside GTAIV.exe. QuickGPS finds that variable and points it at a filter, so it sees every pad read
+    // the game makes and can hide the buttons it uses:
+    //   - D-pad left is hidden while held. Held for HotkeyHoldSeconds, it opens the menu; released sooner,
+    //     a short tap is passed on so weapon switching / radio still work (on release instead of press).
+    //   - While the menu is open, D-pad up/down/left, A and B are hidden (no phone, sprint or melee).
+    //   - After the menu closes, those buttons stay hidden until released.
+    // The filter passes everything through if the script stops pinging it, and the variable is put back
+    // by a watchdog. If the variable can't be found, the pad is polled directly instead (the game then
+    // also reacts to the buttons).
+    class PadInput
+    {
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate int XInputGetStateFn(int userIndex, IntPtr state);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
+        static extern IntPtr GetModuleHandle(string name);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, ExactSpelling = true)]
+        static extern IntPtr GetProcAddress(IntPtr module, string name);
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
+        static extern IntPtr LoadLibrary(string name);
+        [DllImport("kernel32.dll")]
+        static extern bool VirtualProtect(IntPtr addr, IntPtr size, int newProtect, out int oldProtect);
+
+        public const int Up = 0x0001, Down = 0x0002, Left = 0x0004, A = 0x1000, B = 0x2000;
+        const int Used = Up | Down | Left | A | B;
+        const int PAGE_READWRITE = 0x04;
+        const int RepeatDelayMs = 400, RepeatEveryMs = 110, TapMs = 120;
+        const long StaleTicks = 15000000;   // 1.5 s without a ping = the script isn't running
+        const string EnvOrig = "QUICKGPS_XI_ORIG", EnvSlots = "QUICKGPS_XI_SLOTS";
+
+        public int HoldMs = 1000;
+        public volatile bool MenuOpen;
+        public volatile bool Available;    // a pad can be read at all
+        public volatile bool Blocking;     // the game's pad reads go through the filter
+        public volatile int HoldStart;     // TickCount when D-pad left went down (0 = not holding)
+
+        readonly XInputGetStateFn filter;  // kept in a field so the GC never collects the thunk
+        readonly IntPtr thunk;
+        readonly object gate = new object();
+        IntPtr orig;
+        XInputGetStateFn callOrig;
+        readonly List<IntPtr> slots = new List<IntPtr>();
+        bool patched, blockWanted;
+        int lastSetupTry, setupTries;
+        System.Threading.Timer watchdog;
+        long lastPing;
+        IntPtr pollState = Marshal.AllocHGlobal(16);
+
+        // Per-pad state (index 0-3), touched by whichever thread reads the pad.
+        readonly int[] lastRaw = new int[4];
+        readonly int[] leftDownAt = new int[4];
+        readonly bool[] leftUsed = new bool[4];
+        readonly int[] tapUntil = new int[4];
+        readonly int[] drainMask = new int[4];
+        readonly int[] repeatAt = new int[4];
+        readonly int[] lastPacket = new int[4];
+        readonly int[] lastReported = new int[4];
+        readonly int[] synthPacket = new int[4];
+
+        // Results for the script.
+        int steps, selects, backs, opens;
+
+        public PadInput()
+        {
+            filter = new XInputGetStateFn(Filter);
+            thunk = Marshal.GetFunctionPointerForDelegate(filter);
+        }
+
+        public void Ping() { Interlocked.Exchange(ref lastPing, DateTime.UtcNow.Ticks); }
+        bool Alive() { return DateTime.UtcNow.Ticks - Interlocked.Read(ref lastPing) < StaleTicks; }
+
+        public int TakeSteps() { return Interlocked.Exchange(ref steps, 0); }
+        public bool TakeSelect() { return Interlocked.Exchange(ref selects, 0) > 0; }
+        public bool TakeBack() { return Interlocked.Exchange(ref backs, 0) > 0; }
+        public bool TakeOpen() { return Interlocked.Exchange(ref opens, 0) > 0; }
+
+        public void ResetCounters()
+        {
+            Interlocked.Exchange(ref steps, 0);
+            Interlocked.Exchange(ref selects, 0);
+            Interlocked.Exchange(ref backs, 0);
+            Interlocked.Exchange(ref opens, 0);
+        }
+
+        // Called when the menu closes: keep the buttons that are down hidden until they're let go.
+        public void BeginDrain()
+        {
+            for (int i = 0; i < 4; i++) drainMask[i] = lastRaw[i] & Used;
+        }
+
+        // Called every tick. Finds the game's pad pointer (retrying for a while, since the game may look
+        // it up late), keeps the filter installed, and polls the pad itself when there is no filter.
+        public void Update(bool block)
+        {
+            blockWanted = block;
+            if (callOrig == null || (block && slots.Count == 0 && setupTries < 15))
+            {
+                if (unchecked(Environment.TickCount - lastSetupTry) >= 2000 || setupTries == 0)
+                {
+                    lastSetupTry = Environment.TickCount;
+                    setupTries++;
+                    try { Setup(); } catch { }
+                }
+            }
+            if (callOrig == null) return;
+            Available = true;
+
+            if (block && slots.Count > 0)
+            {
+                if (!patched) Install();
+                Blocking = patched;
+                if (Blocking) return;   // the game's own reads drive Process()
+            }
+            else
+            {
+                Blocking = false;
+            }
+
+            // No filter: read the pads directly (the game sees the buttons too).
+            int now = Environment.TickCount;
+            for (int user = 0; user < 4; user++)
+            {
+                int raw = 0;
+                try
+                {
+                    if (callOrig(user, pollState) == 0) raw = (ushort)Marshal.ReadInt16(pollState, 4);
+                    else continue;
+                }
+                catch { return; }
+                Process(user, raw, now);
+            }
+        }
+
+        void Setup()
+        {
+            IntPtr xi = GetModuleHandle("xinput9_1_0.dll");
+            IntPtr fn = xi != IntPtr.Zero ? GetProcAddress(xi, "XInputGetState") : IntPtr.Zero;
+            if (fn == IntPtr.Zero)
+            {
+                // The game hasn't loaded XInput (yet). Poll through another copy so the menu still works.
+                IntPtr other = LoadLibrary("xinput1_4.dll");
+                if (other == IntPtr.Zero) other = LoadLibrary("xinput1_3.dll");
+                if (other != IntPtr.Zero && callOrig == null)
+                {
+                    IntPtr f2 = GetProcAddress(other, "XInputGetState");
+                    if (f2 != IntPtr.Zero) callOrig = (XInputGetStateFn)Marshal.GetDelegateForFunctionPointer(f2, typeof(XInputGetStateFn));
+                }
+                return;
+            }
+
+            // If an earlier copy of this script was reloaded while installed, the variable holds its
+            // filter; the real address and the variable's location are remembered process-wide.
+            string savedOrig = Environment.GetEnvironmentVariable(EnvOrig);
+            string savedSlots = Environment.GetEnvironmentVariable(EnvSlots);
+            if (!string.IsNullOrEmpty(savedOrig) && long.Parse(savedOrig) == fn.ToInt64() && !string.IsNullOrEmpty(savedSlots))
+            {
+                slots.Clear();
+                foreach (string part in savedSlots.Split(','))
+                    if (part.Length > 0) slots.Add(new IntPtr(long.Parse(part)));
+            }
+            else
+            {
+                FindSlots(fn);
+                if (slots.Count > 0)
+                {
+                    Environment.SetEnvironmentVariable(EnvOrig, fn.ToInt64().ToString());
+                    string[] parts = new string[slots.Count];
+                    for (int i = 0; i < slots.Count; i++) parts[i] = slots[i].ToInt64().ToString();
+                    Environment.SetEnvironmentVariable(EnvSlots, string.Join(",", parts));
+                }
+            }
+            orig = fn;
+            callOrig = (XInputGetStateFn)Marshal.GetDelegateForFunctionPointer(fn, typeof(XInputGetStateFn));
+        }
+
+        // Every 4-byte value in GTAIV.exe's writable sections that equals XInputGetState's address.
+        void FindSlots(IntPtr target)
+        {
+            slots.Clear();
+            IntPtr mod = GetModuleHandle(null);
+            int lfanew = Marshal.ReadInt32(mod, 0x3C);
+            IntPtr nt = new IntPtr(mod.ToInt64() + lfanew);
+            int sections = Marshal.ReadInt16(nt, 6);
+            int optSize = Marshal.ReadInt16(nt, 20);
+            long sec = nt.ToInt64() + 24 + optSize;
+            int want = target.ToInt32();
+            for (int s = 0; s < sections; s++, sec += 40)
+            {
+                int size = Marshal.ReadInt32(new IntPtr(sec), 8);
+                int va = Marshal.ReadInt32(new IntPtr(sec), 12);
+                int flags = Marshal.ReadInt32(new IntPtr(sec), 36);
+                if ((flags & unchecked((int)0x80000000)) == 0 || size <= 0) continue;   // writable sections only
+                byte[] buf = new byte[size];
+                try { Marshal.Copy(new IntPtr(mod.ToInt64() + va), buf, 0, size); }
+                catch { continue; }
+                for (int i = 0; i + 4 <= size; i += 4)
+                    if (BitConverter.ToInt32(buf, i) == want) slots.Add(new IntPtr(mod.ToInt64() + va + i));
+            }
+        }
+
+        void Install()
+        {
+            lock (gate)
+            {
+                if (patched || slots.Count == 0) return;
+                try
+                {
+                    for (int i = 0; i < slots.Count; i++) WriteSlot(slots[i], thunk);
+                    patched = true;
+                    if (watchdog == null)
+                        watchdog = new System.Threading.Timer(new TimerCallback(CheckStale), null, 500, 500);
+                }
+                catch
+                {
+                    Restore();
+                    slots.Clear();
+                    setupTries = 99;   // give up on blocking; polling still works
+                }
+            }
+        }
+
+        void Restore()
+        {
+            for (int i = 0; i < slots.Count; i++)
+            {
+                try { WriteSlot(slots[i], orig); } catch { }
+            }
+            patched = false;
+        }
+
+        void CheckStale(object state)
+        {
+            if (patched && !Alive()) lock (gate) Restore();
+        }
+
+        static void WriteSlot(IntPtr slot, IntPtr value)
+        {
+            int old;
+            if (!VirtualProtect(slot, new IntPtr(IntPtr.Size), PAGE_READWRITE, out old))
+                throw new InvalidOperationException("VirtualProtect failed");
+            Marshal.WriteIntPtr(slot, value);
+            int ignored;
+            VirtualProtect(slot, new IntPtr(IntPtr.Size), old, out ignored);
+        }
+
+        // The game's XInputGetState calls land here while the filter is installed.
+        int Filter(int user, IntPtr state)
+        {
+            int hr = callOrig(user, state);
+            if (hr != 0 || state == IntPtr.Zero || user < 0 || user > 3 || !Alive() || !blockWanted) return hr;
+
+            int raw = (ushort)Marshal.ReadInt16(state, 4);
+            int reported = Process(user, raw, Environment.TickCount);
+
+            // Games skip pad states whose packet number didn't change, so give every change we make
+            // (hiding a press, replaying a tap) a new packet number.
+            int packet = Marshal.ReadInt32(state, 0);
+            if (packet != lastPacket[user] || reported != lastReported[user])
+            {
+                synthPacket[user]++;
+                lastPacket[user] = packet;
+                lastReported[user] = reported;
+            }
+            Marshal.WriteInt32(state, 0, synthPacket[user]);
+            Marshal.WriteInt16(state, 4, (short)reported);
+            return hr;
+        }
+
+        // Turns raw buttons into menu actions and returns what the game should see.
+        int Process(int user, int raw, int now)
+        {
+            int pressed = raw & ~lastRaw[user];
+            lastRaw[user] = raw;
+            int hide = 0;
+
+            if (MenuOpen)
+            {
+                if ((pressed & Up) != 0) { Interlocked.Decrement(ref steps); repeatAt[user] = now + RepeatDelayMs; }
+                else if ((pressed & Down) != 0) { Interlocked.Increment(ref steps); repeatAt[user] = now + RepeatDelayMs; }
+                else if ((raw & (Up | Down)) != 0 && unchecked(now - repeatAt[user]) >= 0)
+                {
+                    if ((raw & Up) != 0) Interlocked.Decrement(ref steps); else Interlocked.Increment(ref steps);
+                    repeatAt[user] = now + RepeatEveryMs;
+                }
+                if ((pressed & A) != 0) Interlocked.Increment(ref selects);
+                if ((pressed & B) != 0) Interlocked.Increment(ref backs);
+                hide = Used;
+                leftDownAt[user] = 0;
+                tapUntil[user] = 0;
+            }
+            else
+            {
+                if ((pressed & Left) != 0)
+                {
+                    leftDownAt[user] = now | 1;   // never 0 while held
+                    leftUsed[user] = false;
+                }
+                if (leftDownAt[user] != 0)
+                {
+                    if ((raw & Left) != 0)
+                    {
+                        hide |= Left;
+                        if (!leftUsed[user] && unchecked(now - leftDownAt[user]) >= HoldMs)
+                        {
+                            leftUsed[user] = true;
+                            Interlocked.Increment(ref opens);
+                        }
+                    }
+                    else
+                    {
+                        if (!leftUsed[user]) tapUntil[user] = now + TapMs;   // short press: hand the game a tap
+                        leftDownAt[user] = 0;
+                    }
+                }
+                if (drainMask[user] != 0)
+                {
+                    drainMask[user] &= raw;
+                    hide |= drainMask[user];
+                }
+            }
+
+            int start = 0;
+            for (int i = 0; i < 4; i++)
+                if (leftDownAt[i] != 0 && !leftUsed[i]) { start = leftDownAt[i]; break; }
+            HoldStart = start;
+
+            int reported = raw & ~hide;
+            if (tapUntil[user] != 0)
+            {
+                if (unchecked(now - tapUntil[user]) < 0) reported |= Left;
+                else tapUntil[user] = 0;
+            }
+            return reported;
         }
     }
 }

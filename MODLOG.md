@@ -98,3 +98,19 @@ ScriptHookDotNet (C#), **Tomasak's CE fork** (github.com/Tomasak/gta4_scripthook
 - Tests outside game: DirectInput filter test with the real build; 14 logic checks (sorting, selection follow, line map,
   empty map, direction words, timer) against the stub API. All passed.
 - Added AssemblyVersion 1.0.0, package.ps1 (zip with "/" entry paths), README rewritten for public release with credits.
+
+## v1.1.0: controller support (2026-10-16)
+- Request: hold D-pad left (1 s) to open, D-pad up/down to move, A select, B cancel.
+- Research: GTA IV button IDs for IS_BUTTON_PRESSED (from ClonkAndre/ClonksCodingLib.GTAIV Enums.cs): DPAD_UP 8, DOWN 9,
+  LEFT 10, RIGHT 11, A 16, B 17, X 14, Y 15. NativeUI-IV (ClonkAndre) reads IS_BUTTON_PRESSED and "blocks" by
+  CanControlCharacter=false + TERMINATE_ALL_SCRIPTS_WITH_THIS_NAME "spcellphone"; no IV mod found that truly hides pad input.
+- GTAIV.exe does NOT import XInput statically (only DINPUT8 in the import table); it LoadLibrary's xinput9_1_0.dll and
+  GetProcAddress's XInputGetState into a variable. Approach: scan GTAIV.exe writable sections for a DWORD equal to the
+  XInputGetState address and point it at a managed filter (VirtualProtect + WriteIntPtr); retries every 2 s up to 15x in case
+  the game resolves it late; slots/orig remembered in env vars QUICKGPS_XI_SLOTS / QUICKGPS_XI_ORIG for script reloads;
+  watchdog restores when pings stop. Filter rewrites dwPacketNumber when it changes buttons (games skip unchanged packets).
+- D-pad left is hidden while held; released before HotkeyHoldSeconds -> 120 ms replayed tap (weapon switch/radio on release).
+  Menu open: hides UP/DOWN/LEFT/A/B, auto-repeat 400/110 ms. Close: held buttons hidden until released.
+- Fallback if no slot found: poll XInputGetState directly (game sees buttons), footer "[fallback input]", holster.
+- Tests outside game: 21 PadInput.Process checks pass; filter install/call-through/restore on a planted slot passes
+  (no controller connected -> 1167 passthrough). NOT yet verified in game (slot discovery is the unknown).

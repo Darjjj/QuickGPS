@@ -17,15 +17,15 @@ Scroll to one and left click. A yellow destination marker appears on the map wit
 
 ## Controls
 
-| Input | Action |
-|---|---|
-| Hold Tab (1 s) | Open the menu. A bar fills while you hold, so a quick tap does nothing. |
-| Mouse wheel | Move the selection |
-| Left click | Set a route to the selected entry |
-| Right click, or Tab | Close the menu |
-| F9 | Write a list of every map blip to `scripts\QuickGPS_blips.txt` (for bug reports) |
+| Keyboard and mouse | Controller | Action |
+|---|---|---|
+| Hold Tab (1 s) | Hold D-pad left (1 s) | Open the menu. A bar fills while you hold, so a quick tap does nothing. |
+| Mouse wheel | D-pad up / down (hold to scroll) | Move the selection |
+| Left click | A | Set a route to the selected entry |
+| Right click, or Tab | B | Close the menu |
+| F9 | | Write a list of every map blip to `scripts\QuickGPS_blips.txt` (for bug reports) |
 
-Niko keeps walking or driving while the menu is open. The game doesn't see your clicks or scroll wheel while it's open, so he won't shoot, aim or switch weapons.
+Niko keeps walking or driving while the menu is open. The game doesn't see the clicks, scroll wheel or the controller buttons the menu uses, so he won't shoot, aim, sprint, switch weapons or take out his phone. A quick tap of D-pad left still switches weapons (or radio stations in a car): it just happens when you let go instead of when you press.
 
 **Changing the hotkey in game:** open the menu, scroll to **SETTINGS > Change hotkey** at the bottom, left click it and press the key you want. It's saved to `QuickGPS.ini` straight away. GTA IV's own pause-menu settings can't be extended by scripts, so this option lives in the QuickGPS menu. Everything else (hold time, mouse buttons, scroll direction, miles, and more) is in `QuickGPS.ini`, with a comment on each line.
 
