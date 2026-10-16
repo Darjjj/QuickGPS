@@ -645,6 +645,21 @@ namespace QuickGPS
                 }
             }
 
+            // Same name in two places (e.g. Tony Prince's two mission starts): add the area so they can be told apart.
+            Dictionary<string, int> nameCount = new Dictionary<string, int>();
+            foreach (Entry m in missions)
+            {
+                int n;
+                nameCount.TryGetValue(m.Label, out n);
+                nameCount[m.Label] = n + 1;
+            }
+            foreach (Entry m in missions)
+            {
+                if (nameCount[m.Label] < 2) continue;
+                string area = NearestArea(m.Position);
+                if (area != null) m.Label = m.Label + " (" + area + ")";
+            }
+
             List<Entry> result = new List<Entry>(missions.Count + services.Count + 1);
             result.AddRange(missions);
             result.AddRange(services.Values);
@@ -700,19 +715,22 @@ namespace QuickGPS
         {
             list.Sort(CompareEntries);
 
-            string keep = null;
+            // Keep the highlight on the same place. Two entries can share a name (Tony Prince has two mission
+            // starts), so among same-named entries pick the one closest to where the highlighted one was.
             int sel = selected;
-            if (sel >= 0 && sel < entries.Count) keep = entries[sel].Section + "|" + entries[sel].Label;
-
             int newSel = Math.Min(Math.Max(sel, 0), Math.Max(0, list.Count - 1));
-            if (keep != null)
+            if (sel >= 0 && sel < entries.Count)
             {
+                Entry was = entries[sel];
+                float bestD = float.MaxValue;
                 for (int i = 0; i < list.Count; i++)
                 {
-                    if (list[i].Section + "|" + list[i].Label == keep)
+                    if (list[i].Section != was.Section || list[i].Label != was.Label) continue;
+                    float d = was.IsHotkeySetting ? 0.0f : Distance(list[i].Position, was.Position);
+                    if (d < bestD)
                     {
+                        bestD = d;
                         newSel = i;
-                        break;
                     }
                 }
             }
