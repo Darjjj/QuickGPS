@@ -807,16 +807,20 @@ namespace QuickGPS
             return false;
         }
 
-        // Writes every blip the game reports to scripts\QuickGPS_blips.txt, for troubleshooting.
+        // Adds every blip the game reports to scripts\QuickGPS_blips_<episode>.txt (one file per episode,
+        // each press appended), for troubleshooting and for naming DLC contacts.
         void DumpBlips()
         {
             try
             {
                 Vector3 me = Player.Character.Position;
                 List<Blip> blips = ScanAllBlips();
+                string episode = EpisodeName();
                 System.Text.StringBuilder sb = new System.Text.StringBuilder();
                 const string T = "\t";
-                sb.AppendLine("QuickGPS " + Version + " blip dump " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + ", " + blips.Count + " blips");
+                sb.AppendLine();
+                sb.AppendLine("==== QuickGPS " + Version + " blip dump, " + episode + ", " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + ", " + blips.Count + " blips");
+                sb.AppendLine("Player at " + me.X.ToString("0") + ", " + me.Y.ToString("0") + ", " + me.Z.ToString("0"));
                 sb.AppendLine("Current QuickGPS route: " + (routeLabel ?? "(none)"));
                 sb.AppendLine("sprite" + T + "icon" + T + "type" + T + "rawDisplay" + T + "address" + T + "distance" + T + "x" + T + "y" + T + "z" + T + "quickgps");
                 for (int i = 0; i < blips.Count; i++)
@@ -839,13 +843,32 @@ namespace QuickGPS
                         ((int)Distance(me, p)) + T + p.X.ToString("0") + T + p.Y.ToString("0") + T +
                         p.Z.ToString("0") + T + kind);
                 }
-                string path = System.IO.Path.Combine(System.IO.Path.Combine(Environment.CurrentDirectory, "scripts"), "QuickGPS_blips.txt");
-                System.IO.File.WriteAllText(path, sb.ToString());
-                Notify("QuickGPS: wrote " + blips.Count + " blips to scripts\\QuickGPS_blips.txt");
+                string file = "QuickGPS_blips_" + episode + ".txt";
+                string path = System.IO.Path.Combine(System.IO.Path.Combine(Environment.CurrentDirectory, "scripts"), file);
+                System.IO.File.AppendAllText(path, sb.ToString());
+                Notify("QuickGPS: added " + blips.Count + " blips to scripts\\" + file);
             }
             catch (Exception ex)
             {
                 Notify("QuickGPS: blip dump failed (" + ex.Message + ")");
+            }
+        }
+
+        // "GTAIV", "TLAD" or "TBoGT", used in the dump file name.
+        static string EpisodeName()
+        {
+            try
+            {
+                switch (Game.CurrentEpisode)
+                {
+                    case GameEpisode.TLAD: return "TLAD";
+                    case GameEpisode.TBOGT: return "TBoGT";
+                    default: return "GTAIV";
+                }
+            }
+            catch
+            {
+                return "unknown";
             }
         }
 

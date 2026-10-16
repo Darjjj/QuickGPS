@@ -23,7 +23,7 @@ Scroll to one and left click. A yellow destination marker appears on the map wit
 | Mouse wheel | D-pad up / down (hold to scroll) | Move the selection |
 | Left click | A | Set a route to the selected entry |
 | Right click, or Tab | B | Close the menu |
-| F9 | | Write a list of every map blip to `scripts\QuickGPS_blips.txt` (for bug reports) |
+| F9 | | Add a list of every map blip to `scripts\QuickGPS_blips_<episode>.txt` (for bug reports; one file per episode, each press appended) |
 
 Niko keeps walking or driving while the menu is open. The game doesn't see the clicks, scroll wheel or the controller buttons the menu uses, so he won't shoot, aim, sprint, switch weapons or take out his phone. A quick tap of D-pad left still switches weapons (or radio stations in a car): it just happens when you let go instead of when you press.
 
