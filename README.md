@@ -50,9 +50,13 @@ If nothing shows up, check `ScriptHookDotNet.log` in the GTAIV folder.
 
 ## Building from source
 
-The source is `src\QuickGPS.cs`. Run `build.cmd` (optionally passing your GTAIV folder) to rebuild `scripts\QuickGPS.net.dll`. It compiles against the game's own `ScriptHookDotNet.asi` with the C# compiler that ships with the .NET Framework, so no Visual Studio is needed.
+The source is `QuickGPS\src\QuickGPS.cs`. Run `QuickGPS\build.cmd` (optionally passing your GTAIV folder) to rebuild `QuickGPS\scripts\QuickGPS.net.dll`, and `QuickGPS\package.ps1` to build the release zip. It compiles against the game's own `ScriptHookDotNet.asi` with the C# compiler that ships with the .NET Framework, so no Visual Studio is needed.
 
 ## Credits
 
 - ScriptHookDotNet by HazardX, with Complete Edition support by Tomasak; GTA IV Script Hook by Aru; `aCompleteEditionHook.asi` by LMS.
 - QuickGPS was written with the help of Claude (Anthropic's AI assistant) and tested in game by Darj.
+
+## License
+
+QuickGPS is released under the [MIT License](LICENSE). ScriptHookDotNet and the other tools above have their own licenses.

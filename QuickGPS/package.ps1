@@ -21,7 +21,8 @@ Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
 $files = [ordered]@{
     "scripts/QuickGPS.net.dll" = $dll
     "scripts/QuickGPS.ini"     = (Join-Path $root "scripts\QuickGPS.ini")
-    "QuickGPS-README.md"       = (Join-Path $root "README.md")
+    "QuickGPS-README.md"       = (Join-Path $root "..\README.md")
+    "QuickGPS-LICENSE.txt"     = (Join-Path $root "..\LICENSE")
 }
 $archive = [IO.Compression.ZipFile]::Open($zip, [IO.Compression.ZipArchiveMode]::Create)
 try {
