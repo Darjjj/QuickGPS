@@ -5,9 +5,11 @@
 A quick GPS for GTA IV. Hold **Tab** for a second and a panel opens in the top-left corner listing:
 
 - **Mission givers:** every contact on the map (Roman, Little Jacob, Brucie, strangers, assassination jobs and so on), nearest first.
-- **Nearest services:** the closest one of each kind (Hospital, Gun Shop, Pay 'n' Spray, Clothes Shop, Burger Shot, Internet Cafe, Safehouse, Train Station, Taxi Rank, Bar, Bowling and more).
+- **Suggested:** the nearest Pay 'n' Spray while you're wanted, and the nearest hospital when your health is low, right at the top.
+- **Nearest services:** the three closest of each kind (Hospital, Gun Shop, Pay 'n' Spray, Clothes Shop, Burger Shot, Internet Cafe, Safehouse, Train Station, Taxi Rank, Bar, Bowling and more), labelled with their area.
+- **Saved places:** spots you've saved yourself. "+ Save this spot" stores where you're standing.
 
-Scroll to one and left click. A yellow destination marker appears on the map with a GPS route to it, and a small line in the top-left shows the place, the distance and which way to go ("ahead-left"). The route clears itself when you arrive.
+Scroll to one and left click. A yellow destination marker appears on the map with a GPS route to it, and a small line in the top-left shows the place, the distance and which way to go ("ahead-left"). If the target is a person on the move, the marker follows them. The route clears itself when you arrive, with a short chime.
 
 ![The QuickGPS menu listing mission givers and the nearest services with distances](docs/menu.jpg)
 
@@ -23,11 +25,17 @@ Scroll to one and left click. A yellow destination marker appears on the map wit
 | Mouse wheel | D-pad up / down (hold to scroll) | Move the selection |
 | Left click | A | Set a route to the selected entry |
 | Right click, or Tab | B | Close the menu |
+| Delete | X | Remove the highlighted saved place |
+| | Hold D-pad right (1 s) | Route straight to the nearest Pay 'n' Spray, without opening the menu |
 | F9 | | Add a list of every map blip to `scripts\QuickGPS_blips_<episode>.txt` (for bug reports; one file per episode, each press appended) |
 
-Niko keeps walking or driving while the menu is open. The game doesn't see the clicks, scroll wheel or the controller buttons the menu uses, so he won't shoot, aim, sprint, switch weapons or take out his phone. A quick tap of D-pad left still switches weapons (or radio stations in a car): it just happens when you let go instead of when you press.
+Niko keeps walking or driving while the menu is open. The game doesn't see the clicks, scroll wheel or the controller buttons the menu uses, so he won't shoot, aim, sprint, switch weapons or take out his phone. A quick tap of D-pad left or right still switches weapons (or radio stations in a car): it just happens when you let go instead of when you press.
 
-**Changing the hotkey in game:** open the menu, scroll to **SETTINGS > Change hotkey** at the bottom, left click it and press the key you want. It's saved to `QuickGPS.ini` straight away. GTA IV's own pause-menu settings can't be extended by scripts, so this option lives in the QuickGPS menu. Everything else (hold time, mouse buttons, scroll direction, miles, and more) is in `QuickGPS.ini`, with a comment on each line.
+**Changing the hotkey in game:** open the menu, scroll to **SETTINGS > Change hotkey** at the bottom, left click it and press the key you want. It's saved to `QuickGPS.ini` straight away. GTA IV's own pause-menu settings can't be extended by scripts, so this option lives in the QuickGPS menu. Everything else (hold time, mouse buttons, scroll direction, miles, how many of each service, suggestions, sounds, rumble and more) is in `QuickGPS.ini`, with a comment on each line.
+
+**Saved places** are kept in `scripts\QuickGPS_places.txt`, one `name;x;y;z` per line. Each one is named after its area; rename them by editing that file.
+
+The coloured square on each row shows its type: red for suggested, yellow for mission givers, blue for services, green for saved places.
 
 ## Requirements
 

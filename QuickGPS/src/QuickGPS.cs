@@ -9,6 +9,7 @@
 //   hotkey again     close the menu
 //
 // Controller: hold D-pad left (same hold time) to open, D-pad up/down to move, A to pick, B to close.
+// Hold D-pad right to route straight to the nearest Pay 'n' Spray.
 //
 // While the menu is open the clicks and wheel are filtered out of DirectInput so the game
 // never sees them: Niko doesn't shoot, aim or switch weapons.
@@ -30,18 +31,21 @@ using GTA;
 
 [assembly: AssemblyTitle("QuickGPS")]
 [assembly: AssemblyDescription("GTA IV quick GPS menu for mission givers and nearby services")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
 
 namespace QuickGPS
 {
     public class QuickGPS : Script
     {
-        public const string Version = "1.2.0";
+        public const string Version = "1.3.0";
 
+        const string SectionSuggested = "SUGGESTED";
         const string SectionMissions = "MISSION GIVERS";
         const string SectionServices = "NEAREST SERVICES";
+        const string SectionSaved = "SAVED PLACES";
         const string SectionSettings = "SETTINGS";
+        const string SaveRowLabel = "+ Save this spot";
 
         class Entry
         {
@@ -51,6 +55,8 @@ namespace QuickGPS
             public float Distance;
             public string DistanceText;   // formatted once per refresh, not every frame
             public bool IsHotkeySetting;
+            public bool IsSaveRow;        // "+ Save this spot"
+            public bool IsSaved;          // a place the player saved
             public Blip Source;           // the game's own blip for this destination
         }
 
@@ -163,6 +169,8 @@ namespace QuickGPS
         int maxRows;
         float arriveDistance;
         int holdMs;
+        int servicesPerKind, lowHealth;
+        bool smartSorting, playSounds, rumble, followTargets;
 
         // Timings (ms). A full blip scan asks the game about every sprite id, so it only runs when the
         // menu opens and every few seconds; in between, distances are refreshed from the blips found.
@@ -198,6 +206,16 @@ namespace QuickGPS
         volatile MenuView view;
 
         Blip routeBlip;        // QuickGPS's own destination marker
+        Blip routeSource;      // the game's blip the route leads to (followed if it moves)
+        int lastFollow;
+        int secondToneAt;      // arrival chime: when to play its second tone (0 = none)
+        readonly List<SavedPlace> savedPlaces = new List<SavedPlace>();
+
+        class SavedPlace
+        {
+            public string Name;
+            public Vector3 Position;
+        }
         string routeLabel;
         Vector3 routeTarget;
         volatile string routeHint; // e.g. "Little Jacob  756 m  ahead-left", built in the tick
@@ -223,6 +241,13 @@ namespace QuickGPS
             arriveDistance = Settings.GetValueFloat("ArriveDistance", "Settings", 25.0f);
             holdMs = (int)(1000.0f * Math.Max(0.0f, Settings.GetValueFloat("HotkeyHoldSeconds", "Settings", 1.0f)));
             showRouteHint = Settings.GetValueBool("ShowRouteHint", "Settings", true);
+            servicesPerKind = Math.Max(1, Settings.GetValueInteger("ServicesPerKind", "Settings", 3));
+            smartSorting = Settings.GetValueBool("SmartSuggestions", "Settings", true);
+            lowHealth = Settings.GetValueInteger("LowHealth", "Settings", 40);
+            playSounds = Settings.GetValueBool("PlaySounds", "Settings", true);
+            rumble = Settings.GetValueBool("ControllerRumble", "Settings", true);
+            followTargets = Settings.GetValueBool("FollowMovingTargets", "Settings", true);
+            LoadSavedPlaces();
 
             mouse = new MouseBlocker(selectButton, closeButton);
 
@@ -286,6 +311,14 @@ namespace QuickGPS
                     lastInputPad = true;
                     OpenMenu();
                 }
+                if (pad.TakeQuick() && !menuOpen)
+                    QuickRoute("Pay 'n' Spray");
+            }
+
+            if (secondToneAt != 0 && Since(secondToneAt) >= 0)
+            {
+                secondToneAt = 0;
+                Tone(9, false);
             }
 
             if (menuOpen)
@@ -334,13 +367,10 @@ namespace QuickGPS
             }
             if (select)
             {
-                int sel = selected;
-                if (sel >= 0 && sel < entries.Count && entries[sel].IsHotkeySetting)
-                    capturingHotkey = true;
-                else
-                    CloseMenu(true);
+                ActivateSelected(true);
                 return;
             }
+            if (pad.TakeDelete()) DeleteSelectedSaved();
             if (steps != 0 && entries.Count > 0)
                 selected = ((selected + steps) % entries.Count + entries.Count) % entries.Count;
         }
@@ -390,11 +420,7 @@ namespace QuickGPS
             }
             if (select)
             {
-                int sel = selected;
-                if (sel >= 0 && sel < entries.Count && entries[sel].IsHotkeySetting)
-                    capturingHotkey = true;
-                else
-                    CloseMenu(true);
+                ActivateSelected(false);
                 return;
             }
 
@@ -438,6 +464,140 @@ namespace QuickGPS
                 CaptureHotkey(e.Key);
             else if (e.Key == dumpKey)
                 DumpBlips();
+            else if (menuOpen && e.Key == Keys.Delete)
+                DeleteSelectedSaved();
+        }
+
+        // Left click / A on the highlighted row.
+        void ActivateSelected(bool fromPad)
+        {
+            int sel = selected;
+            if (sel < 0 || sel >= entries.Count) return;
+            Entry e = entries[sel];
+            if (e.IsHotkeySetting)
+            {
+                capturingHotkey = true;
+                return;
+            }
+            if (e.IsSaveRow)
+            {
+                SaveCurrentSpot();
+                return;
+            }
+            if (fromPad && rumble && pad != null) pad.Rumble(120);
+            CloseMenu(true);
+        }
+
+        // ---------------------------------------------------------------- saved places
+
+        static string PlacesPath()
+        {
+            return System.IO.Path.Combine(System.IO.Path.Combine(Environment.CurrentDirectory, "scripts"), "QuickGPS_places.txt");
+        }
+
+        // scripts\QuickGPS_places.txt, one "name;x;y;z" per line (editable by hand).
+        void LoadSavedPlaces()
+        {
+            savedPlaces.Clear();
+            try
+            {
+                if (!System.IO.File.Exists(PlacesPath())) return;
+                System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+                foreach (string line in System.IO.File.ReadAllLines(PlacesPath()))
+                {
+                    string[] parts = line.Split(';');
+                    if (line.StartsWith("#") || parts.Length < 4) continue;
+                    float x, y, z;
+                    if (!float.TryParse(parts[1], System.Globalization.NumberStyles.Float, inv, out x)) continue;
+                    if (!float.TryParse(parts[2], System.Globalization.NumberStyles.Float, inv, out y)) continue;
+                    if (!float.TryParse(parts[3], System.Globalization.NumberStyles.Float, inv, out z)) continue;
+                    SavedPlace sp = new SavedPlace();
+                    sp.Name = parts[0].Trim();
+                    sp.Position = new Vector3(x, y, z);
+                    if (sp.Name.Length > 0) savedPlaces.Add(sp);
+                }
+            }
+            catch { }
+        }
+
+        bool WriteSavedPlaces()
+        {
+            try
+            {
+                System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+                List<string> lines = new List<string>();
+                lines.Add("# QuickGPS saved places: name;x;y;z (edit names freely, one place per line)");
+                foreach (SavedPlace sp in savedPlaces)
+                    lines.Add(sp.Name.Replace(";", ",") + ";" + sp.Position.X.ToString("0.00", inv) + ";" +
+                        sp.Position.Y.ToString("0.00", inv) + ";" + sp.Position.Z.ToString("0.00", inv));
+                System.IO.File.WriteAllLines(PlacesPath(), lines.ToArray());
+                return true;
+            }
+            catch { return false; }
+        }
+
+        void SaveCurrentSpot()
+        {
+            Vector3 pos = Player.Character.Position;
+            string baseName = NearestArea(pos) ?? "Saved spot";
+            string name = baseName;
+            for (int n = 2; savedPlaces.Exists(delegate(SavedPlace sp) { return sp.Name == name; }); n++)
+                name = baseName + " " + n;
+            SavedPlace place = new SavedPlace();
+            place.Name = name;
+            place.Position = pos;
+            savedPlaces.Add(place);
+            bool ok = WriteSavedPlaces();
+            Tone(5, false);
+            Notify(ok ? "QuickGPS: saved \"" + name + "\"" : "QuickGPS: saved \"" + name + "\" (could not write QuickGPS_places.txt)");
+            Rebuild();
+        }
+
+        void DeleteSelectedSaved()
+        {
+            int sel = selected;
+            if (sel < 0 || sel >= entries.Count || !entries[sel].IsSaved) return;
+            Entry e = entries[sel];
+            int index = savedPlaces.FindIndex(delegate(SavedPlace sp) { return sp.Name == e.Label && Distance(sp.Position, e.Position) < 1.0f; });
+            if (index < 0) return;
+            savedPlaces.RemoveAt(index);
+            WriteSavedPlaces();
+            Notify("QuickGPS: removed \"" + e.Label + "\"");
+            Rebuild();
+        }
+
+        // ---------------------------------------------------------------- quick route (hold D-pad right)
+
+        void QuickRoute(string kind)
+        {
+            Vector3 me = Player.Character.Position;
+            currentEpisode = EpisodeName();
+            Entry best = null;
+            foreach (Blip b in ScanAllBlips())
+            {
+                string label;
+                bool isMission;
+                if (object.ReferenceEquals(b, routeBlip) || !Classify(b, out label, out isMission)) continue;
+                if (isMission || label != kind) continue;
+                Vector3 pos = b.Position;
+                if (!PlausiblePosition(pos)) continue;
+                float d = Distance(me, pos);
+                if (best == null || d < best.Distance) best = NewEntry(label, SectionServices, b, pos, d);
+            }
+            if (best == null)
+            {
+                Notify("QuickGPS: no " + kind + " on the map");
+                return;
+            }
+            if (rumble && pad != null) pad.Rumble(120);
+            SetRoute(best);
+        }
+
+        // Game phone keypad tones: they play through the game's own audio at its volume.
+        void Tone(int key, bool fast)
+        {
+            if (!playSounds) return;
+            try { Game.PlayPhoneKeypadTone(key, fast); } catch { }
         }
 
         void CaptureHotkey(Keys k)
@@ -617,7 +777,7 @@ namespace QuickGPS
 
             Vector3 me = Player.Character.Position;
             List<Entry> missions = new List<Entry>();
-            Dictionary<string, Entry> services = new Dictionary<string, Entry>();
+            Dictionary<string, List<Entry>> services = new Dictionary<string, List<Entry>>();
 
             List<Blip> blips = ScanAllBlips();
             for (int i = 0; i < blips.Count; i++)
@@ -639,36 +799,94 @@ namespace QuickGPS
                 }
                 else
                 {
-                    Entry cur;
-                    if (!services.TryGetValue(label, out cur) || dist < cur.Distance)
-                        services[label] = NewEntry(label, SectionServices, b, pos, dist);
+                    List<Entry> kind;
+                    if (!services.TryGetValue(label, out kind)) services[label] = kind = new List<Entry>();
+                    kind.Add(NewEntry(label, SectionServices, b, pos, dist));
                 }
             }
 
-            // Same name in two places (e.g. Tony Prince's two mission starts): add the area so they can be told apart.
-            Dictionary<string, int> nameCount = new Dictionary<string, int>();
-            foreach (Entry m in missions)
+            // Keep the nearest few of each kind of service.
+            List<Entry> serviceList = new List<Entry>();
+            foreach (List<Entry> kind in services.Values)
             {
-                int n;
-                nameCount.TryGetValue(m.Label, out n);
-                nameCount[m.Label] = n + 1;
-            }
-            foreach (Entry m in missions)
-            {
-                if (nameCount[m.Label] < 2) continue;
-                string area = NearestArea(m.Position);
-                if (area != null) m.Label = m.Label + " (" + area + ")";
+                kind.Sort(CompareDistance);
+                serviceList.AddRange(kind.GetRange(0, Math.Min(servicesPerKind, kind.Count)));
             }
 
-            List<Entry> result = new List<Entry>(missions.Count + services.Count + 1);
+            // Same name in two places (Tony Prince's two mission starts, three gun shops): add the area.
+            AddAreaToRepeatedNames(missions);
+            AddAreaToRepeatedNames(serviceList);
+
+            List<Entry> result = new List<Entry>(missions.Count + serviceList.Count + savedPlaces.Count + 4);
+            AddSuggestions(result, serviceList);
             result.AddRange(missions);
-            result.AddRange(services.Values);
+            result.AddRange(serviceList);
+            foreach (SavedPlace sp in savedPlaces)
+            {
+                Entry e = NewEntry(sp.Name, SectionSaved, null, sp.Position, Distance(me, sp.Position));
+                e.IsSaved = true;
+                result.Add(e);
+            }
+            Entry save = new Entry();
+            save.Label = SaveRowLabel;
+            save.Section = SectionSaved;
+            save.IsSaveRow = true;
+            result.Add(save);
             Entry hk = new Entry();
             hk.Label = "Change hotkey (now: " + hotkey + ")";
             hk.Section = SectionSettings;
             hk.IsHotkeySetting = true;
             result.Add(hk);
             Publish(result);
+        }
+
+        static int CompareDistance(Entry a, Entry b)
+        {
+            return a.Distance.CompareTo(b.Distance);
+        }
+
+        void AddAreaToRepeatedNames(List<Entry> list)
+        {
+            Dictionary<string, int> count = new Dictionary<string, int>();
+            foreach (Entry e in list)
+            {
+                int n;
+                count.TryGetValue(e.Label, out n);
+                count[e.Label] = n + 1;
+            }
+            foreach (Entry e in list)
+            {
+                if (count[e.Label] < 2) continue;
+                string area = NearestArea(e.Position);
+                if (area != null) e.Label = e.Label + " (" + area + ")";
+            }
+        }
+
+        // Top of the menu when it matters: nearest Pay 'n' Spray while wanted, nearest hospital on low health.
+        void AddSuggestions(List<Entry> result, List<Entry> serviceList)
+        {
+            if (!smartSorting) return;
+            int wanted = 0, health = 100;
+            try { wanted = Player.WantedLevel; } catch { }
+            try { health = Player.Character.Health; } catch { }
+            if (wanted > 0) AddSuggestion(result, serviceList, "Pay 'n' Spray", "Pay 'n' Spray - lose the cops");
+            if (health < lowHealth) AddSuggestion(result, serviceList, "Hospital", "Hospital - low health");
+        }
+
+        static void AddSuggestion(List<Entry> result, List<Entry> serviceList, string kind, string label)
+        {
+            Entry best = null;
+            foreach (Entry e in serviceList)
+                if ((e.Label == kind || e.Label.StartsWith(kind + " (")) && (best == null || e.Distance < best.Distance)) best = e;
+            if (best == null) return;
+            Entry s = new Entry();
+            s.Label = label;
+            s.Section = SectionSuggested;
+            s.Source = best.Source;
+            s.Position = best.Position;
+            s.Distance = best.Distance;
+            s.DistanceText = best.DistanceText;
+            result.Add(s);
         }
 
         // Between full scans: re-read the known blips' positions and re-sort by distance.
@@ -680,7 +898,7 @@ namespace QuickGPS
             for (int i = 0; i < entries.Count; i++)
             {
                 Entry old = entries[i];
-                if (old.IsHotkeySetting)
+                if (old.IsHotkeySetting || old.IsSaveRow)
                 {
                     result.Add(old);
                     continue;
@@ -692,7 +910,9 @@ namespace QuickGPS
                     Vector3 p = old.Source.Position;
                     if (PlausiblePosition(p)) pos = p;
                 }
-                result.Add(NewEntry(old.Label, old.Section, old.Source, pos, Distance(me, pos)));
+                Entry e = NewEntry(old.Label, old.Section, old.Source, pos, Distance(me, pos));
+                e.IsSaved = old.IsSaved;
+                result.Add(e);
             }
             Publish(result);
         }
@@ -726,7 +946,7 @@ namespace QuickGPS
                 for (int i = 0; i < list.Count; i++)
                 {
                     if (list[i].Section != was.Section || list[i].Label != was.Label) continue;
-                    float d = was.IsHotkeySetting ? 0.0f : Distance(list[i].Position, was.Position);
+                    float d = was.IsHotkeySetting || was.IsSaveRow ? 0.0f : Distance(list[i].Position, was.Position);
                     if (d < bestD)
                     {
                         bestD = d;
@@ -755,7 +975,9 @@ namespace QuickGPS
                 v.LineOfEntry[i] = v.Lines.Count;
                 v.Lines.Add(l);
             }
-            v.HasDestinations = v.Entries.Length > 1;
+            int destinations = 0;
+            foreach (Entry e in v.Entries) if (!e.IsHotkeySetting && !e.IsSaveRow) destinations++;
+            v.HasDestinations = destinations > 0;
 
             entries = list;
             selected = newSel;
@@ -767,14 +989,17 @@ namespace QuickGPS
         {
             int sa = SectionOrder(a.Section), sb = SectionOrder(b.Section);
             if (sa != sb) return sa.CompareTo(sb);
+            if (a.IsSaveRow != b.IsSaveRow) return a.IsSaveRow ? 1 : -1;
             return a.Distance.CompareTo(b.Distance);
         }
 
         static int SectionOrder(string section)
         {
-            if (section == SectionMissions) return 0;
-            if (section == SectionServices) return 1;
-            return 2;
+            if (section == SectionSuggested) return 0;
+            if (section == SectionMissions) return 1;
+            if (section == SectionServices) return 2;
+            if (section == SectionSaved) return 3;
+            return 4;
         }
 
         // Every blip on the map, one entry per blip.
@@ -1017,7 +1242,10 @@ namespace QuickGPS
             routeBlip.RouteActive = true;
             routeLabel = target.Label;
             routeTarget = pos;
+            routeSource = followTargets ? target.Source : null;
+            lastFollow = Environment.TickCount;
             lastRouteUpdate = 0;   // show the hint right away
+            Tone(5, false);
 
             bool inVehicle = false;
             try { inVehicle = Player.Character.isInVehicle(); } catch { }
@@ -1033,6 +1261,7 @@ namespace QuickGPS
                 routeBlip.Delete();
             }
             routeBlip = null;
+            routeSource = null;
             routeLabel = null;
             routeHint = null;
         }
@@ -1046,14 +1275,44 @@ namespace QuickGPS
                 routeHint = null;
                 return;
             }
+            FollowTarget();
             float dist = Distance(me, routeTarget);
             if (dist < arriveDistance)
             {
                 Notify("QuickGPS: arrived at " + routeLabel);
+                Tone(1, false);
+                secondToneAt = Environment.TickCount + 180;
                 ClearRoute();
                 return;
             }
             routeHint = showRouteHint ? routeLabel + "  " + FormatDistance(dist) + "  " + DirectionTo(me, routeTarget) : null;
+        }
+
+        // People (random characters, some contacts) walk or drive around. Blips can't be moved, so when the
+        // target has moved far enough the marker is put down again where it is now (at most every 1.5 s).
+        void FollowTarget()
+        {
+            if (routeSource == null || Since(lastFollow) < 1500) return;
+            if (!Game.Exists(routeSource))
+            {
+                routeSource = null;   // e.g. the encounter started; keep the marker where it is
+                return;
+            }
+            Vector3 now = routeSource.Position;
+            if (!PlausiblePosition(now) || Distance(now, routeTarget) < 20.0f) return;
+            lastFollow = Environment.TickCount;
+            Blip moved = Blip.AddBlip(now);
+            if (moved == null) return;
+            moved.Icon = BlipIcon.Misc_Destination;
+            moved.Color = BlipColor.Yellow;
+            moved.RouteActive = true;
+            if (routeBlip != null && Game.Exists(routeBlip))
+            {
+                routeBlip.RouteActive = false;
+                routeBlip.Delete();
+            }
+            routeBlip = moved;
+            routeTarget = now;
         }
 
         static readonly string[] DirectionNames = { "ahead", "ahead-left", "left", "behind-left", "behind", "behind-right", "right", "ahead-right" };
@@ -1148,8 +1407,14 @@ namespace QuickGPS
         bool DrawHoldBar(GTA.Graphics g)
         {
             int start;
+            string title = "QUICK GPS";
             if (hotkeyWasDown && !holdUsed) start = holdStart;
             else if (this.pad != null && this.pad.HoldStart != 0) start = this.pad.HoldStart;
+            else if (this.pad != null && this.pad.QuickHoldStart != 0)
+            {
+                start = this.pad.QuickHoldStart;
+                title = "PAY 'N' SPRAY";
+            }
             else return false;
             if (holdMs <= 0 || Since(start) < 150) return false;
 
@@ -1157,7 +1422,7 @@ namespace QuickGPS
             float x = 24.0f * s, y = 24.0f * s, w = 220.0f * s, h = 40.0f * s, pad = 10.0f * s;
             float barH = 6.0f * s;
             g.DrawRectangle(x + w / 2, y + h / 2, w, h, Color.FromArgb(170, 0, 0, 0));
-            g.DrawText("QUICK GPS", x + pad, y + 4.0f * s, Accent, hintFont);
+            g.DrawText(title, x + pad, y + 4.0f * s, Accent, hintFont);
             float fill = (w - pad * 2) * HoldProgress(start);
             g.DrawRectangle(x + w / 2, y + h - pad, w - pad * 2, barH, Color.FromArgb(200, 60, 60, 60));
             if (fill > 0.5f)
@@ -1223,7 +1488,10 @@ namespace QuickGPS
                         g.DrawRectangle(x + w / 2, cy + rowH / 2, w - pad, rowH, HighlightColor);
                     Color c = isSel ? Color.Black : Color.White;
                     string text = en.IsHotkeySetting && capturingHotkey ? "Press a new key...  (click to cancel)" : en.Label;
-                    g.DrawText((isSel ? "> " : "  ") + text, x + pad, cy + 2.0f * s, c, font);
+                    // Small coloured square: what kind of entry this is.
+                    float m = 8.0f * s;
+                    g.DrawRectangle(x + pad + m / 2, cy + rowH / 2, m, m, MarkerColor(en));
+                    g.DrawText((isSel ? "> " : "  ") + text, x + pad + m + 4.0f * s, cy + 2.0f * s, c, font);
                     if (en.DistanceText != null)
                         g.DrawText(en.DistanceText, new RectangleF(x, cy + 2.0f * s, w - pad, rowH), GTA.TextAlignment.Right, c, font);
                 }
@@ -1240,7 +1508,24 @@ namespace QuickGPS
                 footer = this.pad.Blocking ? PadFooterText : PadFooterText + "   [fallback input]";
             else
                 footer = HookActive() ? FooterText : FooterText + "   [fallback input]";
+            if (sel < v.Entries.Length && v.Entries[sel].IsSaved)
+                footer += lastInputPad ? "   X: remove" : "   Delete: remove";
             g.DrawText(footer, x + pad, cy + pad / 2, HintColor, hintFont);
+        }
+
+        static readonly Color SuggestedMarker = Color.FromArgb(255, 235, 90, 90);
+        static readonly Color MissionMarker = Color.FromArgb(255, 240, 200, 80);
+        static readonly Color ServiceMarker = Color.FromArgb(255, 110, 170, 255);
+        static readonly Color SavedMarker = Color.FromArgb(255, 110, 220, 130);
+        static readonly Color SettingsMarker = Color.FromArgb(255, 150, 150, 150);
+
+        static Color MarkerColor(Entry e)
+        {
+            if (e.Section == SectionSuggested) return SuggestedMarker;
+            if (e.Section == SectionMissions) return MissionMarker;
+            if (e.Section == SectionServices) return ServiceMarker;
+            if (e.Section == SectionSaved) return SavedMarker;
+            return SettingsMarker;
         }
 
         const string FooterText = "Scroll: select   Left click: go   Right click: close";
@@ -1595,6 +1880,8 @@ namespace QuickGPS
     {
         [UnmanagedFunctionPointer(CallingConvention.StdCall)]
         delegate int XInputGetStateFn(int userIndex, IntPtr state);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate int XInputSetStateFn(int userIndex, IntPtr vibration);
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
         static extern IntPtr GetModuleHandle(string name);
@@ -1605,8 +1892,11 @@ namespace QuickGPS
         [DllImport("kernel32.dll")]
         static extern bool VirtualProtect(IntPtr addr, IntPtr size, int newProtect, out int oldProtect);
 
-        public const int Up = 0x0001, Down = 0x0002, Left = 0x0004, A = 0x1000, B = 0x2000;
-        const int Used = Up | Down | Left | A | B;
+        public const int Up = 0x0001, Down = 0x0002, Left = 0x0004, Right = 0x0008, A = 0x1000, B = 0x2000, X = 0x4000;
+        const int Used = Up | Down | Left | Right | A | B | X;
+        // Buttons that do something when held while the menu is closed: D-pad left opens the menu,
+        // D-pad right routes to the nearest Pay 'n' Spray. Short presses are passed on to the game as a tap.
+        static readonly int[] HoldButtons = { Left, Right };
         const int PAGE_READWRITE = 0x04;
         const int RepeatDelayMs = 400, RepeatEveryMs = 110, TapMs = 120;
         const long StaleTicks = 15000000;   // 1.5 s without a ping = the script isn't running
@@ -1617,12 +1907,15 @@ namespace QuickGPS
         public volatile bool Available;    // a pad can be read at all
         public volatile bool Blocking;     // the game's pad reads go through the filter
         public volatile int HoldStart;     // TickCount when D-pad left went down (0 = not holding)
+        public volatile int QuickHoldStart; // same for D-pad right (quick route to a Pay 'n' Spray)
 
         readonly XInputGetStateFn filter;  // kept in a field so the GC never collects the thunk
         readonly IntPtr thunk;
         readonly object gate = new object();
         IntPtr orig;
         XInputGetStateFn callOrig;
+        XInputSetStateFn setState;
+        System.Threading.Timer rumbleStop;
         readonly List<IntPtr> slots = new List<IntPtr>();
         bool patched, blockWanted;
         int lastSetupTry, setupTries;
@@ -1632,9 +1925,10 @@ namespace QuickGPS
 
         // Per-pad state (index 0-3), touched by whichever thread reads the pad.
         readonly int[] lastRaw = new int[4];
-        readonly int[] leftDownAt = new int[4];
-        readonly bool[] leftUsed = new bool[4];
-        readonly int[] tapUntil = new int[4];
+        readonly int[,] holdAt = new int[2, 4];      // [hold button, pad] TickCount when pressed (0 = up)
+        readonly bool[,] holdDone = new bool[2, 4];  // the hold already fired
+        readonly int[,] tapUntil = new int[2, 4];    // replaying a short press to the game until then
+        volatile int lastPadUser;                    // pad that last pressed A (for rumble)
         readonly int[] drainMask = new int[4];
         readonly int[] repeatAt = new int[4];
         readonly int[] lastPacket = new int[4];
@@ -1642,7 +1936,7 @@ namespace QuickGPS
         readonly int[] synthPacket = new int[4];
 
         // Results for the script.
-        int steps, selects, backs, opens;
+        int steps, selects, backs, opens, quicks, deletes;
 
         public PadInput()
         {
@@ -1657,6 +1951,8 @@ namespace QuickGPS
         public bool TakeSelect() { return Interlocked.Exchange(ref selects, 0) > 0; }
         public bool TakeBack() { return Interlocked.Exchange(ref backs, 0) > 0; }
         public bool TakeOpen() { return Interlocked.Exchange(ref opens, 0) > 0; }
+        public bool TakeQuick() { return Interlocked.Exchange(ref quicks, 0) > 0; }
+        public bool TakeDelete() { return Interlocked.Exchange(ref deletes, 0) > 0; }
 
         public void ResetCounters()
         {
@@ -1664,6 +1960,8 @@ namespace QuickGPS
             Interlocked.Exchange(ref selects, 0);
             Interlocked.Exchange(ref backs, 0);
             Interlocked.Exchange(ref opens, 0);
+            Interlocked.Exchange(ref quicks, 0);
+            Interlocked.Exchange(ref deletes, 0);
         }
 
         // Called when the menu closes: keep the buttons that are down hidden until they're let go.
@@ -1754,6 +2052,9 @@ namespace QuickGPS
                 }
             }
             orig = fn;
+            IntPtr setFn = GetProcAddress(xi, "XInputSetState");
+            if (setFn != IntPtr.Zero)
+                setState = (XInputSetStateFn)Marshal.GetDelegateForFunctionPointer(setFn, typeof(XInputSetStateFn));
             callOrig = (XInputGetStateFn)Marshal.GetDelegateForFunctionPointer(fn, typeof(XInputGetStateFn));
         }
 
@@ -1850,6 +2151,34 @@ namespace QuickGPS
             return hr;
         }
 
+        // A short buzz on the pad that last pressed A (the game may override it with its own rumble).
+        public void Rumble(int ms)
+        {
+            XInputSetStateFn set = setState;
+            if (set == null) return;
+            int user = lastPadUser;
+            try
+            {
+                SetVibration(set, user, 22000, 22000);
+                if (rumbleStop != null) rumbleStop.Dispose();
+                rumbleStop = new System.Threading.Timer(new TimerCallback(delegate(object o) { SetVibration(set, user, 0, 0); }), null, ms, Timeout.Infinite);
+            }
+            catch { }
+        }
+
+        static void SetVibration(XInputSetStateFn set, int user, int left, int right)
+        {
+            IntPtr v = Marshal.AllocHGlobal(4);
+            try
+            {
+                Marshal.WriteInt16(v, 0, (short)(ushort)left);
+                Marshal.WriteInt16(v, 2, (short)(ushort)right);
+                set(user, v);
+            }
+            catch { }
+            finally { Marshal.FreeHGlobal(v); }
+        }
+
         // Turns raw buttons into menu actions and returns what the game should see.
         int Process(int user, int raw, int now)
         {
@@ -1866,34 +2195,42 @@ namespace QuickGPS
                     if ((raw & Up) != 0) Interlocked.Decrement(ref steps); else Interlocked.Increment(ref steps);
                     repeatAt[user] = now + RepeatEveryMs;
                 }
-                if ((pressed & A) != 0) Interlocked.Increment(ref selects);
+                if ((pressed & A) != 0) { lastPadUser = user; Interlocked.Increment(ref selects); }
                 if ((pressed & B) != 0) Interlocked.Increment(ref backs);
+                if ((pressed & X) != 0) Interlocked.Increment(ref deletes);
                 hide = Used;
-                leftDownAt[user] = 0;
-                tapUntil[user] = 0;
+                for (int h = 0; h < HoldButtons.Length; h++)
+                {
+                    holdAt[h, user] = 0;
+                    tapUntil[h, user] = 0;
+                }
             }
             else
             {
-                if ((pressed & Left) != 0)
+                for (int h = 0; h < HoldButtons.Length; h++)
                 {
-                    leftDownAt[user] = now | 1;   // never 0 while held
-                    leftUsed[user] = false;
-                }
-                if (leftDownAt[user] != 0)
-                {
-                    if ((raw & Left) != 0)
+                    int btn = HoldButtons[h];
+                    if ((pressed & btn) != 0)
                     {
-                        hide |= Left;
-                        if (!leftUsed[user] && unchecked(now - leftDownAt[user]) >= HoldMs)
+                        holdAt[h, user] = now | 1;   // never 0 while held
+                        holdDone[h, user] = false;
+                    }
+                    if (holdAt[h, user] == 0) continue;
+                    if ((raw & btn) != 0)
+                    {
+                        hide |= btn;
+                        if (!holdDone[h, user] && unchecked(now - holdAt[h, user]) >= HoldMs)
                         {
-                            leftUsed[user] = true;
-                            Interlocked.Increment(ref opens);
+                            holdDone[h, user] = true;
+                            lastPadUser = user;
+                            if (btn == Left) Interlocked.Increment(ref opens);
+                            else Interlocked.Increment(ref quicks);
                         }
                     }
                     else
                     {
-                        if (!leftUsed[user]) tapUntil[user] = now + TapMs;   // short press: hand the game a tap
-                        leftDownAt[user] = 0;
+                        if (!holdDone[h, user]) tapUntil[h, user] = now + TapMs;   // short press: hand the game a tap
+                        holdAt[h, user] = 0;
                     }
                 }
                 if (drainMask[user] != 0)
@@ -1903,18 +2240,25 @@ namespace QuickGPS
                 }
             }
 
-            int start = 0;
-            for (int i = 0; i < 4; i++)
-                if (leftDownAt[i] != 0 && !leftUsed[i]) { start = leftDownAt[i]; break; }
-            HoldStart = start;
+            HoldStart = PendingHold(0);
+            QuickHoldStart = PendingHold(1);
 
             int reported = raw & ~hide;
-            if (tapUntil[user] != 0)
+            for (int h = 0; h < HoldButtons.Length; h++)
             {
-                if (unchecked(now - tapUntil[user]) < 0) reported |= Left;
-                else tapUntil[user] = 0;
+                if (tapUntil[h, user] == 0) continue;
+                if (unchecked(now - tapUntil[h, user]) < 0) reported |= HoldButtons[h];
+                else tapUntil[h, user] = 0;
             }
             return reported;
+        }
+
+        // When a hold of this button is in progress on any pad, the TickCount it started; else 0.
+        int PendingHold(int h)
+        {
+            for (int i = 0; i < 4; i++)
+                if (holdAt[h, i] != 0 && !holdDone[h, i]) return holdAt[h, i];
+            return 0;
         }
     }
 }

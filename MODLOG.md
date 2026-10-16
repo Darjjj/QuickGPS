@@ -131,3 +131,19 @@ ScriptHookDotNet (C#), **Tomasak's CE fork** (github.com/Tomasak/gta4_scripthook
   episode not given -> "ANY"). Generic icons get a specific name within 60 m: Person_Male/Female -> RandomCharacters,
   Person_Unknown/Misc_Boss -> MissionGivers; otherwise the generic label stays. Table: 70 giver places, 31 random, 66 areas.
   Real-data check: the "Stranger (male)" at (863,-558) from the first dump resolves to Brian Meech (early-game encounter).
+
+## v1.3.0 work (2026-10-16), not released yet
+- Smart suggestions (SUGGESTED section): nearest Pay 'n' Spray when Player.WantedLevel > 0, nearest hospital when
+  Ped.Health (SHDN returns raw-100, so 0-100) < LowHealth (40).
+- ServicesPerKind (3) nearest of each service; repeated names in missions and services get " (area)".
+- Saved places: scripts\QuickGPS_places.txt "name;x;y;z" (invariant culture, 2 decimals); "+ Save this spot" row
+  names spots by NearestArea; Delete key / controller X removes the highlighted one.
+- Hold D-pad right (HotkeyHoldSeconds) = quick route to nearest Pay 'n' Spray (user's choice instead of keyboard keys);
+  same hide/tap-replay as D-pad left. PadInput Used mask now Up|Down|Left|Right|A|B|X while the menu is open.
+- Follow moving targets: SHDN Blip.Position setter throws, so the marker is re-created at the source blip's position when
+  it moved >20 m (max every 1.5 s); dropped if the source disappears.
+- Sounds: Game.PlayPhoneKeypadTone (game audio, known-good names PHONE_PRESS_KEY): route set, place saved, arrival 2 tones.
+- Rumble: XInputSetState from xinput9_1_0 on the pad that pressed A, 120 ms (game may override).
+- Type markers: coloured square per row by section (real radar icons would mean redistributing game art).
+- Tests: controller 21+10 checks (old "unrelated button" check now uses Y since D-pad right is used), filter install,
+  7 v1.3 logic checks (areas, suggestions, ordering, saved-place round trip), earlier suites unchanged. Not in game yet.
