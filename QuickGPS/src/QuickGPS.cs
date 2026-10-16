@@ -12,21 +12,31 @@
 // never sees them: Niko doesn't shoot, aim or switch weapons.
 //
 // SETTINGS > "Change hotkey" lets you rebind the hotkey in game; it's saved to QuickGPS.ini.
-// Settings live in QuickGPS.ini next to this file.
-// Written for the old CodeDom compiler that ScriptHookDotNet uses: keep to C# 3 syntax.
+// Settings live in QuickGPS.ini next to the DLL.
+//
+// Ship it precompiled (build.cmd): ScriptHookDotNet's runtime compilation of .cs scripts can crash
+// its native hook on 1.2.0.59.
 
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 using GTA;
 
+[assembly: AssemblyTitle("QuickGPS")]
+[assembly: AssemblyDescription("GTA IV quick GPS menu for mission givers and nearby services")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
+
 namespace QuickGPS
 {
     public class QuickGPS : Script
     {
+        public const string Version = "1.0.0";
+
         const string SectionMissions = "MISSION GIVERS";
         const string SectionServices = "NEAREST SERVICES";
         const string SectionSettings = "SETTINGS";
@@ -37,15 +47,24 @@ namespace QuickGPS
             public string Section;
             public Vector3 Position;
             public float Distance;
+            public string DistanceText;   // formatted once per refresh, not every frame
             public bool IsHotkeySetting;
-            public Blip Source;   // the game's own blip for this destination
+            public Blip Source;           // the game's own blip for this destination
         }
 
         class Line
         {
-            public string Text;
-            public bool IsHeader;
-            public int EntryIndex;
+            public string Text;       // section header text
+            public int EntryIndex;    // -1 for a section header
+        }
+
+        // Everything the draw code needs, built in the tick and swapped in as one object.
+        class MenuView
+        {
+            public Entry[] Entries;
+            public List<Line> Lines;
+            public int[] LineOfEntry;
+            public bool HasDestinations;
         }
 
         // GET_FIRST/NEXT_BLIP_INFO_ID take a blip *sprite* id, not a blip type (ScriptHookDotNet's
@@ -131,38 +150,45 @@ namespace QuickGPS
         // Settings
         Keys hotkey, selectButton, closeButton, dumpKey;
         int maxSprite;
-        bool freezeWhileOpen, holsterWhileOpen, invertScroll, imperial, useMouseHook;
+        bool freezeWhileOpen, holsterWhileOpen, invertScroll, imperial, useMouseHook, showRouteHint;
         int maxRows;
         float arriveDistance;
-        float holdSeconds;
-        bool showRouteHint;
-        string routeHint;      // e.g. "Little Jacob  756 m  ahead-left", built in the tick
+        int holdMs;
 
-        // State
-        bool menuOpen;
+        // Timings (ms). A full blip scan asks the game about every sprite id, so it only runs when the
+        // menu opens and every few seconds; in between, distances are refreshed from the blips found.
+        const int FullScanMs = 3000;
+        const int RefreshMs = 250;
+        const int RouteUpdateMs = 100;
+
+        // State. Times are Environment.TickCount values (cheap, wrap-safe when subtracted).
+        volatile bool menuOpen;
         bool draining;         // menu closed, but a mouse button pressed in it is still held
         int drainFrames;
-        DateTime drainStarted;
-        bool capturingHotkey;  // waiting for the player to press a new hotkey
-        bool hotkeyWasDown;
-        bool holdUsed;         // this press already opened or closed the menu
-        DateTime holdStart;
-        bool selectWasDown;    // edge detection when the mouse hook isn't available
+        int drainStarted;
+        volatile bool capturingHotkey;  // waiting for the player to press a new hotkey
+        volatile bool hotkeyWasDown;
+        volatile bool holdUsed; // this press already opened or closed the menu
+        int holdStart;
+        bool selectWasDown;    // edge detection when the mouse filter isn't available
         bool closeWasDown;
         bool frozeControl;
         bool holstered;
         GTA.Weapon savedWeapon = GTA.Weapon.Unarmed;
         bool wheelBroken;
         int wheelAccum;
-        int selected;
-        List<Entry> entries = new List<Entry>();
-        DateTime lastRefresh = DateTime.MinValue;
+        int lastFullScan, lastRefresh, lastRouteUpdate;
         MouseBlocker mouse;
 
-        Blip routeBlip;
-        bool ownsRouteBlip;    // true only for the fallback marker QuickGPS created itself
+        // Menu contents. The tick builds a new MenuView and swaps it in; drawing only reads it.
+        List<Entry> entries = new List<Entry>();
+        volatile int selected;
+        volatile MenuView view;
+
+        Blip routeBlip;        // QuickGPS's own destination marker
         string routeLabel;
         Vector3 routeTarget;
+        volatile string routeHint; // e.g. "Little Jacob  756 m  ahead-left", built in the tick
 
         GTA.Font font;
         GTA.Font titleFont;
@@ -183,15 +209,20 @@ namespace QuickGPS
             imperial = Settings.GetValueBool("UseMiles", "Settings", false);
             maxRows = Math.Max(5, Settings.GetValueInteger("MaxVisibleRows", "Settings", 14));
             arriveDistance = Settings.GetValueFloat("ArriveDistance", "Settings", 25.0f);
-            holdSeconds = Math.Max(0.0f, Settings.GetValueFloat("HotkeyHoldSeconds", "Settings", 1.0f));
+            holdMs = (int)(1000.0f * Math.Max(0.0f, Settings.GetValueFloat("HotkeyHoldSeconds", "Settings", 1.0f)));
             showRouteHint = Settings.GetValueBool("ShowRouteHint", "Settings", true);
 
             mouse = new MouseBlocker(selectButton, closeButton);
 
-            Interval = 0;   // every frame, so input is never missed
+            Interval = 0;   // every frame, so input is never missed; the work per frame is kept small
             this.Tick += new EventHandler(OnTick);
             this.KeyDown += new GTA.KeyEventHandler(OnKeyDown);
             this.PerFrameDrawing += new GraphicsEventHandler(OnDraw);
+        }
+
+        static int Since(int tick)
+        {
+            return unchecked(Environment.TickCount - tick);
         }
 
         // ---------------------------------------------------------------- tick / input
@@ -207,12 +238,11 @@ namespace QuickGPS
                 return;
             }
 
-            // The hotkey toggles the menu: press to open, press again (or right click) to close.
-            bool hotkeyDown = isKeyPressed(hotkey);
             // Hold the hotkey to open the menu (HotkeyHoldSeconds); a press while it's open closes it.
+            bool hotkeyDown = isKeyPressed(hotkey);
             if (hotkeyDown && !hotkeyWasDown)
             {
-                holdStart = DateTime.Now;
+                holdStart = Environment.TickCount;
                 holdUsed = capturingHotkey;
                 if (menuOpen && !capturingHotkey)
                 {
@@ -230,11 +260,18 @@ namespace QuickGPS
             if (menuOpen)
             {
                 HandleMouse();
-                if (menuOpen && (DateTime.Now - lastRefresh).TotalMilliseconds > 500)
-                    Rebuild();
+                if (menuOpen)
+                {
+                    if (Since(lastFullScan) >= FullScanMs) Rebuild();
+                    else if (Since(lastRefresh) >= RefreshMs) RefreshDistances();
+                }
             }
 
-            UpdateRoute(me.Position);
+            if (Since(lastRouteUpdate) >= RouteUpdateMs)
+            {
+                lastRouteUpdate = Environment.TickCount;
+                UpdateRoute(me.Position);
+            }
         }
 
         bool HookActive()
@@ -249,8 +286,8 @@ namespace QuickGPS
 
             if (HookActive())
             {
-                // The hook eats the clicks and wheel before the game sees them, so Niko
-                // doesn't shoot, aim or switch weapons. It removes itself if pings stop.
+                // The filter hides the clicks and wheel from the game, so Niko doesn't shoot, aim or
+                // switch weapons. It removes itself if pings stop.
                 mouse.Ping();
                 mouse.Start();
                 wheel = mouse.TakeWheel();
@@ -285,7 +322,8 @@ namespace QuickGPS
             }
             if (select)
             {
-                if (selected >= 0 && selected < entries.Count && entries[selected].IsHotkeySetting)
+                int sel = selected;
+                if (sel >= 0 && sel < entries.Count && entries[sel].IsHotkeySetting)
                     capturingHotkey = true;
                 else
                     CloseMenu(true);
@@ -296,17 +334,19 @@ namespace QuickGPS
             {
                 // 120 per notch; smooth-scrolling mice send smaller steps, so accumulate.
                 wheelAccum += wheel;
+                int sel = selected;
                 while (Math.Abs(wheelAccum) >= 120)
                 {
                     int step = wheelAccum > 0 ? -1 : 1;   // wheel up = move up the list
                     wheelAccum += wheelAccum > 0 ? -120 : 120;
                     if (invertScroll) step = -step;
-                    selected = (selected + step + entries.Count) % entries.Count;
+                    sel = (sel + step + entries.Count) % entries.Count;
                 }
+                selected = sel;
             }
         }
 
-        // The game's own wheel reading (GET_MOUSE_WHEEL); used only when the mouse hook can't be installed.
+        // The game's own wheel reading (GET_MOUSE_WHEEL); used only when the mouse filter can't start.
         int ReadMouseWheel()
         {
             if (wheelBroken) return 0;
@@ -327,15 +367,9 @@ namespace QuickGPS
         void OnKeyDown(object sender, GTA.KeyEventArgs e)
         {
             if (capturingHotkey)
-            {
                 CaptureHotkey(e.Key);
-                return;
-            }
-            if (e.Key == dumpKey)
-            {
+            else if (e.Key == dumpKey)
                 DumpBlips();
-                return;
-            }
         }
 
         void CaptureHotkey(Keys k)
@@ -372,21 +406,15 @@ namespace QuickGPS
                 if (System.IO.File.Exists(path))
                 {
                     string[] lines = System.IO.File.ReadAllLines(path);
-                    bool found = false;
                     for (int i = 0; i < lines.Length; i++)
                     {
                         string t = lines[i].Trim();
                         if (t.StartsWith("Hotkey", StringComparison.OrdinalIgnoreCase) && t.Substring(6).TrimStart().StartsWith("="))
                         {
                             lines[i] = "Hotkey=" + k;
-                            found = true;
-                            break;
+                            System.IO.File.WriteAllLines(path, lines);
+                            return true;
                         }
-                    }
-                    if (found)
-                    {
-                        System.IO.File.WriteAllLines(path, lines);
-                        return true;
                     }
                 }
                 Settings.SetValue("Hotkey", "Settings", k);
@@ -401,7 +429,6 @@ namespace QuickGPS
         void OpenMenu()
         {
             draining = false;
-            menuOpen = true;
             capturingHotkey = false;
             selected = 0;
             wheelAccum = 0;
@@ -418,21 +445,24 @@ namespace QuickGPS
             {
                 ReadMouseWheel();   // throw away wheel movement from before the menu opened
             }
+            entries = new List<Entry>();   // start at the top, not on last time's selection
             Rebuild();
+            menuOpen = true;
 
             if (freezeWhileOpen && Player.CanControlCharacter)
             {
                 Player.CanControlCharacter = false;
                 frozeControl = true;
             }
-            // Without the hook the clicks reach the game, so put the gun away instead.
+            // Without the filter the clicks reach the game, so put the gun away instead.
             if (!holstered && (holsterWhileOpen || !HookActive())) Holster();
         }
 
         void CloseMenu(bool confirm)
         {
-            if (confirm && selected >= 0 && selected < entries.Count)
-                SetRoute(entries[selected]);
+            int sel = selected;
+            if (confirm && sel >= 0 && sel < entries.Count)
+                SetRoute(entries[sel]);
 
             menuOpen = false;
             capturingHotkey = false;
@@ -452,7 +482,7 @@ namespace QuickGPS
             mouse.BeginDrain();
             draining = true;
             drainFrames = 0;
-            drainStarted = DateTime.Now;
+            drainStarted = Environment.TickCount;
         }
 
         void UpdateDrain()
@@ -461,7 +491,7 @@ namespace QuickGPS
             mouse.Ping();
             bool held = isKeyPressed(selectButton) || isKeyPressed(closeButton);
             drainFrames = held ? 0 : drainFrames + 1;
-            if (drainFrames >= 3 || (DateTime.Now - drainStarted).TotalSeconds > 10)
+            if (drainFrames >= 3 || Since(drainStarted) > 10000)
             {
                 draining = false;
                 mouse.Stop();
@@ -497,19 +527,12 @@ namespace QuickGPS
             catch { }
         }
 
-        // ---------------------------------------------------------------- blip scan
+        // ---------------------------------------------------------------- menu contents
 
+        // Full scan: every blip on the map, classified and reduced to the menu entries.
         void Rebuild()
         {
-            lastRefresh = DateTime.Now;
-
-            string keepLabel = null;
-            string keepSection = null;
-            if (selected >= 0 && selected < entries.Count)
-            {
-                keepLabel = entries[selected].Label;
-                keepSection = entries[selected].Section;
-            }
+            lastFullScan = lastRefresh = Environment.TickCount;
 
             Vector3 me = Player.Character.Position;
             List<Entry> missions = new List<Entry>();
@@ -519,7 +542,7 @@ namespace QuickGPS
             for (int i = 0; i < blips.Count; i++)
             {
                 Blip b = blips[i];
-                if (ownsRouteBlip && object.ReferenceEquals(b, routeBlip)) continue;
+                if (object.ReferenceEquals(b, routeBlip)) continue;
 
                 string label;
                 bool isMission;
@@ -530,58 +553,129 @@ namespace QuickGPS
 
                 if (isMission)
                 {
-                    if (IsDuplicate(missions, label, pos)) continue;
-                    Entry m = new Entry();
-                    m.Label = label;
-                    m.Section = SectionMissions;
-                    m.Position = pos;
-                    m.Distance = dist;
-                    m.Source = b;
-                    missions.Add(m);
+                    if (!IsDuplicate(missions, label, pos))
+                        missions.Add(NewEntry(label, SectionMissions, b, pos, dist));
                 }
                 else
                 {
                     Entry cur;
-                    if (services.TryGetValue(label, out cur) && cur.Distance <= dist) continue;
-                    Entry s = new Entry();
-                    s.Label = label;
-                    s.Section = SectionServices;
-                    s.Position = pos;
-                    s.Distance = dist;
-                    s.Source = b;
-                    services[label] = s;
+                    if (!services.TryGetValue(label, out cur) || dist < cur.Distance)
+                        services[label] = NewEntry(label, SectionServices, b, pos, dist);
                 }
             }
 
-            missions.Sort(CompareDistance);
-            List<Entry> serviceList = new List<Entry>(services.Values);
-            serviceList.Sort(CompareDistance);
-
-            List<Entry> result = new List<Entry>();
+            List<Entry> result = new List<Entry>(missions.Count + services.Count + 1);
             result.AddRange(missions);
-            result.AddRange(serviceList);
-
+            result.AddRange(services.Values);
             Entry hk = new Entry();
             hk.Label = "Change hotkey (now: " + hotkey + ")";
             hk.Section = SectionSettings;
-            hk.Position = me;
             hk.IsHotkeySetting = true;
             result.Add(hk);
-            entries = result;
+            Publish(result);
+        }
 
-            // Keep the highlight on the same destination when distances reshuffle the list.
-            selected = Math.Min(selected, Math.Max(0, entries.Count - 1));
-            if (keepLabel != null)
+        // Between full scans: re-read the known blips' positions and re-sort by distance.
+        void RefreshDistances()
+        {
+            lastRefresh = Environment.TickCount;
+            Vector3 me = Player.Character.Position;
+            List<Entry> result = new List<Entry>(entries.Count);
+            for (int i = 0; i < entries.Count; i++)
             {
-                for (int i = 0; i < entries.Count; i++)
+                Entry old = entries[i];
+                if (old.IsHotkeySetting)
                 {
-                    if (entries[i].Label == keepLabel && entries[i].Section == keepSection)
+                    result.Add(old);
+                    continue;
+                }
+                if (old.Source != null && !Game.Exists(old.Source)) continue;   // the game removed it
+                Vector3 pos = old.Position;
+                if (old.Source != null)
+                {
+                    Vector3 p = old.Source.Position;
+                    if (PlausiblePosition(p)) pos = p;
+                }
+                result.Add(NewEntry(old.Label, old.Section, old.Source, pos, Distance(me, pos)));
+            }
+            Publish(result);
+        }
+
+        Entry NewEntry(string label, string section, Blip source, Vector3 pos, float dist)
+        {
+            Entry e = new Entry();
+            e.Label = label;
+            e.Section = section;
+            e.Source = source;
+            e.Position = pos;
+            e.Distance = dist;
+            e.DistanceText = PlausiblePosition(pos) ? FormatDistance(dist) : "--";
+            return e;
+        }
+
+        // Sorts each section by distance, keeps the highlight on the same destination, and
+        // swaps in the precomputed rows the draw code reads.
+        void Publish(List<Entry> list)
+        {
+            list.Sort(CompareEntries);
+
+            string keep = null;
+            int sel = selected;
+            if (sel >= 0 && sel < entries.Count) keep = entries[sel].Section + "|" + entries[sel].Label;
+
+            int newSel = Math.Min(Math.Max(sel, 0), Math.Max(0, list.Count - 1));
+            if (keep != null)
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    if (list[i].Section + "|" + list[i].Label == keep)
                     {
-                        selected = i;
+                        newSel = i;
                         break;
                     }
                 }
             }
+
+            MenuView v = new MenuView();
+            v.Entries = list.ToArray();
+            v.LineOfEntry = new int[v.Entries.Length];
+            v.Lines = new List<Line>(v.Entries.Length + 3);
+            string lastSection = null;
+            for (int i = 0; i < v.Entries.Length; i++)
+            {
+                if (v.Entries[i].Section != lastSection)
+                {
+                    lastSection = v.Entries[i].Section;
+                    Line h = new Line();
+                    h.Text = lastSection;
+                    h.EntryIndex = -1;
+                    v.Lines.Add(h);
+                }
+                Line l = new Line();
+                l.EntryIndex = i;
+                v.LineOfEntry[i] = v.Lines.Count;
+                v.Lines.Add(l);
+            }
+            v.HasDestinations = v.Entries.Length > 1;
+
+            entries = list;
+            selected = newSel;
+            view = v;
+        }
+
+        // Sections in menu order, then nearest first.
+        static int CompareEntries(Entry a, Entry b)
+        {
+            int sa = SectionOrder(a.Section), sb = SectionOrder(b.Section);
+            if (sa != sb) return sa.CompareTo(sb);
+            return a.Distance.CompareTo(b.Distance);
+        }
+
+        static int SectionOrder(string section)
+        {
+            if (section == SectionMissions) return 0;
+            if (section == SectionServices) return 1;
+            return 2;
         }
 
         // Every blip on the map, one entry per blip.
@@ -648,10 +742,10 @@ namespace QuickGPS
                 Vector3 me = Player.Character.Position;
                 List<Blip> blips = ScanAllBlips();
                 System.Text.StringBuilder sb = new System.Text.StringBuilder();
-                sb.AppendLine("QuickGPS blip dump " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + ", " + blips.Count + " blips");
                 const string T = "\t";
+                sb.AppendLine("QuickGPS " + Version + " blip dump " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + ", " + blips.Count + " blips");
                 sb.AppendLine("Current QuickGPS route: " + (routeLabel ?? "(none)"));
-                sb.AppendLine("sprite" + T + "icon" + T + "type" + T + "display" + T + "rawDisplay" + T + "address" + T + "distance" + T + "x" + T + "y" + T + "z" + T + "quickgps");
+                sb.AppendLine("sprite" + T + "icon" + T + "type" + T + "rawDisplay" + T + "address" + T + "distance" + T + "x" + T + "y" + T + "z" + T + "quickgps");
                 for (int i = 0; i < blips.Count; i++)
                 {
                     Blip b = blips[i];
@@ -661,14 +755,14 @@ namespace QuickGPS
                         kind = (isMission ? "mission: " : "service: ") + label;
                     else
                         kind = "-";
-                    string type, display;
+                    // Note: ScriptHookDotNet's Blip.Display is unreliable on 1.2.0.59 and Blip.Name crashes
+                    // (GET_BLIP_NAME doesn't exist), so neither is used.
+                    string type, rawDisplay, address;
                     try { type = b.Type.ToString(); } catch { type = "?"; }
-                    try { display = b.Display.ToString(); } catch { display = "?"; }
-                    string rawDisplay, address;
-                    try { rawDisplay = RawDisplay(b).ToString(); } catch { rawDisplay = "?"; }
+                    try { rawDisplay = GTA.Native.Function.Call<int>("GET_BLIP_INFO_ID_DISPLAY", b).ToString(); } catch { rawDisplay = "?"; }
                     try { address = "0x" + b.MemoryAddress.ToString("X8"); } catch { address = "?"; }
                     Vector3 p = b.Position;
-                    sb.AppendLine((int)b.Icon + T + b.Icon + T + type + T + display + T + rawDisplay + T + address + T +
+                    sb.AppendLine((int)b.Icon + T + b.Icon + T + type + T + rawDisplay + T + address + T +
                         ((int)Distance(me, p)) + T + p.X.ToString("0") + T + p.Y.ToString("0") + T +
                         p.Z.ToString("0") + T + kind);
                 }
@@ -682,22 +776,11 @@ namespace QuickGPS
             }
         }
 
-        // GET_BLIP_INFO_ID_DISPLAY straight from the game, without ScriptHookDotNet's conversion.
-        static int RawDisplay(Blip b)
-        {
-            return GTA.Native.Function.Call<int>("GET_BLIP_INFO_ID_DISPLAY", b);
-        }
-
         static bool IsDuplicate(List<Entry> list, string label, Vector3 pos)
         {
             for (int i = 0; i < list.Count; i++)
                 if (list[i].Label == label && Distance(list[i].Position, pos) < 30.0f) return true;
             return false;
-        }
-
-        static int CompareDistance(Entry a, Entry b)
-        {
-            return a.Distance.CompareTo(b.Distance);
         }
 
         static float Distance(Vector3 a, Vector3 b)
@@ -729,12 +812,12 @@ namespace QuickGPS
                 Notify("QuickGPS: could not set a route");
                 return;
             }
-            ownsRouteBlip = true;
             routeBlip.Icon = BlipIcon.Misc_Destination;
             routeBlip.Color = BlipColor.Yellow;
             routeBlip.RouteActive = true;
             routeLabel = target.Label;
             routeTarget = pos;
+            lastRouteUpdate = 0;   // show the hint right away
 
             bool inVehicle = false;
             try { inVehicle = Player.Character.isInVehicle(); } catch { }
@@ -747,35 +830,33 @@ namespace QuickGPS
             if (routeBlip != null && Game.Exists(routeBlip))
             {
                 routeBlip.RouteActive = false;
-                // Never delete the game's own blips, only the fallback marker.
-                if (ownsRouteBlip) routeBlip.Delete();
+                routeBlip.Delete();
             }
             routeBlip = null;
-            ownsRouteBlip = false;
             routeLabel = null;
+            routeHint = null;
         }
 
         void UpdateRoute(Vector3 me)
         {
-            routeHint = null;
             if (routeBlip == null) return;
             if (!Game.Exists(routeBlip))
             {
-                // The game removed the blip (e.g. the mission started).
                 routeBlip = null;
-                ownsRouteBlip = false;
+                routeHint = null;
                 return;
             }
-            Vector3 target = ownsRouteBlip ? routeTarget : routeBlip.Position;
-            if (!PlausiblePosition(target)) return;
-            if (Distance(me, target) < arriveDistance)
+            float dist = Distance(me, routeTarget);
+            if (dist < arriveDistance)
             {
                 Notify("QuickGPS: arrived at " + routeLabel);
                 ClearRoute();
                 return;
             }
-            if (showRouteHint) routeHint = routeLabel + "  " + FormatDistance(Distance(me, target)) + "  " + DirectionTo(me, target);
+            routeHint = showRouteHint ? routeLabel + "  " + FormatDistance(dist) + "  " + DirectionTo(me, routeTarget) : null;
         }
+
+        static readonly string[] DirectionNames = { "ahead", "ahead-left", "left", "behind-left", "behind", "behind-right", "right", "ahead-right" };
 
         // Where the target is relative to the camera: ahead, ahead-right, right, behind-right, ...
         static string DirectionTo(Vector3 me, Vector3 target)
@@ -790,9 +871,8 @@ namespace QuickGPS
             float tx = target.X - me.X, ty = target.Y - me.Y;
             if ((cx == 0 && cy == 0) || (tx == 0 && ty == 0)) return "";
             double angle = Math.Atan2(cx * ty - cy * tx, cx * tx + cy * ty) * 180.0 / Math.PI;   // + = to the left
-            string[] names = { "ahead", "ahead-left", "left", "behind-left", "behind", "behind-right", "right", "ahead-right" };
             int sector = (int)Math.Round(angle / 45.0);
-            return names[((sector % 8) + 8) % 8];
+            return DirectionNames[((sector % 8) + 8) % 8];
         }
 
         // Rejects the zero / NaN / far-off-map positions a bad blip read produces.
@@ -821,86 +901,78 @@ namespace QuickGPS
         }
 
         // ---------------------------------------------------------------- drawing
+        // Drawing only reads state the tick prepared (view, selected, routeHint); it never scans blips.
 
-        // Small filling bar in the top-left while the hotkey is held (not shown for quick taps).
-        // Small "GPS: <target>  <distance>  <direction>" line in the top-left while a route is set.
-        void DrawRouteHint(GTA.Graphics g)
+        static readonly Color Accent = Color.FromArgb(255, 240, 200, 80);
+        static readonly Color HeaderColor = Color.FromArgb(255, 140, 180, 255);
+        static readonly Color HintColor = Color.FromArgb(255, 170, 170, 170);
+        static readonly Color PanelColor = Color.FromArgb(190, 0, 0, 0);
+        static readonly Color HighlightColor = Color.FromArgb(200, 240, 200, 80);
+
+        // Scale factor for the current resolution (UI is laid out for 1080p); recreates fonts on change.
+        float BeginDraw(GTA.Graphics g)
         {
-            string hint = routeHint;
-            if (hint == null) return;
             g.Scaling = FontScaling.Pixel;
-            Size res = Game.Resolution;
-            float s = res.Height / 1080.0f;
-            EnsureFonts(res.Height, s);
-            float x = 24.0f * s, y = 24.0f * s, h = 30.0f * s, pad = 10.0f * s;
-            float w = (12 + hint.Length * 11) * s;
-            g.DrawRectangle(x + w / 2, y + h / 2, w, h, Color.FromArgb(150, 0, 0, 0));
-            g.DrawText("GPS: " + hint, x + pad, y + 5.0f * s, Color.FromArgb(255, 240, 200, 80), hintFont);
-        }
-
-        void EnsureFonts(int height, float s)
-        {
-            if (fontForHeight == height) return;
-            font = new GTA.Font(22.0f * s, FontScaling.Pixel);
-            titleFont = new GTA.Font(28.0f * s, FontScaling.Pixel, true, false);
-            hintFont = new GTA.Font(17.0f * s, FontScaling.Pixel);
-            fontForHeight = height;
-        }
-
-        bool DrawHoldBar(GTA.Graphics g)
-        {
-            if (!hotkeyWasDown || holdUsed || holdSeconds <= 0.0f) return false;
-            if ((DateTime.Now - holdStart).TotalSeconds < 0.15) return false;
-
-            g.Scaling = FontScaling.Pixel;
-            Size res = Game.Resolution;
-            float s = res.Height / 1080.0f;
-            if (fontForHeight != res.Height)
+            int height = Game.Resolution.Height;
+            float s = height / 1080.0f;
+            if (fontForHeight != height)
             {
                 font = new GTA.Font(22.0f * s, FontScaling.Pixel);
                 titleFont = new GTA.Font(28.0f * s, FontScaling.Pixel, true, false);
                 hintFont = new GTA.Font(17.0f * s, FontScaling.Pixel);
-                fontForHeight = res.Height;
+                fontForHeight = height;
             }
-
-            float x = 24.0f * s, y = 24.0f * s, w = 220.0f * s, h = 40.0f * s, pad = 10.0f * s;
-            float barH = 6.0f * s;
-            g.DrawRectangle(x + w / 2, y + h / 2, w, h, Color.FromArgb(170, 0, 0, 0));
-            g.DrawText("QUICK GPS", x + pad, y + 4.0f * s, Color.FromArgb(255, 240, 200, 80), hintFont);
-            float fill = (w - pad * 2) * HoldProgress();
-            g.DrawRectangle(x + w / 2, y + h - pad, w - pad * 2, barH, Color.FromArgb(200, 60, 60, 60));
-            if (fill > 0.5f)
-                g.DrawRectangle(x + pad + fill / 2, y + h - pad, fill, barH, Color.FromArgb(255, 240, 200, 80));
-            return true;
+            return s;
         }
 
         // 0..1 while the hotkey is being held to open the menu.
         float HoldProgress()
         {
-            if (holdSeconds <= 0.0f) return 1.0f;
-            return (float)Math.Min(1.0, (DateTime.Now - holdStart).TotalSeconds / holdSeconds);
+            if (holdMs <= 0) return 1.0f;
+            return Math.Min(1.0f, Since(holdStart) / (float)holdMs);
         }
 
         void OnDraw(object sender, GraphicsEventArgs e)
         {
-            if (!menuOpen)
-            {
-                if (!DrawHoldBar(e.Graphics)) DrawRouteHint(e.Graphics);
-                return;
-            }
-
             GTA.Graphics g = e.Graphics;
-            g.Scaling = FontScaling.Pixel;
+            if (menuOpen) DrawMenu(g);
+            else if (!DrawHoldBar(g)) DrawRouteHint(g);
+        }
 
-            Size res = Game.Resolution;
-            float s = res.Height / 1080.0f;
-            if (fontForHeight != res.Height)
-            {
-                font = new GTA.Font(22.0f * s, FontScaling.Pixel);
-                titleFont = new GTA.Font(28.0f * s, FontScaling.Pixel, true, false);
-                hintFont = new GTA.Font(17.0f * s, FontScaling.Pixel);
-                fontForHeight = res.Height;
-            }
+        // Small filling bar in the top-left while the hotkey is held (not shown for quick taps).
+        bool DrawHoldBar(GTA.Graphics g)
+        {
+            if (!hotkeyWasDown || holdUsed || holdMs <= 0 || Since(holdStart) < 150) return false;
+
+            float s = BeginDraw(g);
+            float x = 24.0f * s, y = 24.0f * s, w = 220.0f * s, h = 40.0f * s, pad = 10.0f * s;
+            float barH = 6.0f * s;
+            g.DrawRectangle(x + w / 2, y + h / 2, w, h, Color.FromArgb(170, 0, 0, 0));
+            g.DrawText("QUICK GPS", x + pad, y + 4.0f * s, Accent, hintFont);
+            float fill = (w - pad * 2) * HoldProgress();
+            g.DrawRectangle(x + w / 2, y + h - pad, w - pad * 2, barH, Color.FromArgb(200, 60, 60, 60));
+            if (fill > 0.5f)
+                g.DrawRectangle(x + pad + fill / 2, y + h - pad, fill, barH, Accent);
+            return true;
+        }
+
+        // Small "GPS: <target>  <distance>  <direction>" line in the top-left while a route is set.
+        void DrawRouteHint(GTA.Graphics g)
+        {
+            string hint = routeHint;
+            if (hint == null) return;
+            float s = BeginDraw(g);
+            float x = 24.0f * s, y = 24.0f * s, h = 30.0f * s, pad = 10.0f * s;
+            float w = (12 + hint.Length * 11) * s;
+            g.DrawRectangle(x + w / 2, y + h / 2, w, h, Color.FromArgb(150, 0, 0, 0));
+            g.DrawText("GPS: " + hint, x + pad, y + 5.0f * s, Accent, hintFont);
+        }
+
+        void DrawMenu(GTA.Graphics g)
+        {
+            MenuView v = view;
+            if (v == null) return;
+            float s = BeginDraw(g);
 
             float x = 24.0f * s;
             float y = 24.0f * s;
@@ -909,76 +981,55 @@ namespace QuickGPS
             float rowH = 28.0f * s;
             float titleH = 40.0f * s;
 
-            // Flatten into lines with section headers, then window around the selection.
-            List<Line> lines = new List<Line>();
-            string lastSection = null;
-            int selectedLine = 0;
-            for (int i = 0; i < entries.Count; i++)
-            {
-                if (entries[i].Section != lastSection)
-                {
-                    lastSection = entries[i].Section;
-                    Line h = new Line();
-                    h.Text = lastSection;
-                    h.IsHeader = true;
-                    h.EntryIndex = -1;
-                    lines.Add(h);
-                }
-                Line l = new Line();
-                l.Text = entries[i].Label;
-                l.EntryIndex = i;
-                if (i == selected) selectedLine = lines.Count;
-                lines.Add(l);
-            }
+            int count = v.Lines.Count;
+            int sel = Math.Min(Math.Max(selected, 0), Math.Max(0, v.Entries.Length - 1));
+            int selectedLine = v.Entries.Length > 0 ? v.LineOfEntry[sel] : 0;
+            int shown = Math.Min(maxRows, count);
+            int first = Math.Max(0, Math.Min(selectedLine - shown / 2, count - shown));
+            int rowsDrawn = shown + (v.HasDestinations ? 0 : 1);
+            float panelH = titleH + rowsDrawn * rowH + rowH + pad * 2;
 
-            int shown = Math.Min(maxRows, lines.Count);
-            int first = Math.Max(0, Math.Min(selectedLine - shown / 2, lines.Count - shown));
-            bool noBlips = entries.Count <= 1;
-            int rowsDrawn = shown + (noBlips ? 1 : 0);
-            float h2 = titleH + rowsDrawn * rowH + rowH + pad * 2;
-
-            g.DrawRectangle(x + w / 2, y + h2 / 2, w, h2, Color.FromArgb(190, 0, 0, 0));
-            g.DrawRectangle(x + w / 2, y + 2.0f * s, w, 4.0f * s, Color.FromArgb(255, 240, 200, 80));
-            g.DrawText("QUICK GPS", x + pad, y + pad, Color.FromArgb(255, 240, 200, 80), titleFont);
+            g.DrawRectangle(x + w / 2, y + panelH / 2, w, panelH, PanelColor);
+            g.DrawRectangle(x + w / 2, y + 2.0f * s, w, 4.0f * s, Accent);
+            g.DrawText("QUICK GPS", x + pad, y + pad, Accent, titleFont);
 
             float cy = y + pad + titleH;
-            if (noBlips)
+            if (!v.HasDestinations)
             {
                 g.DrawText("No mission givers or services on the map.", x + pad, cy, Color.LightGray, font);
                 cy += rowH;
             }
             for (int i = first; i < first + shown; i++)
             {
-                Line l = lines[i];
-                if (l.IsHeader)
+                Line l = v.Lines[i];
+                if (l.EntryIndex < 0)
                 {
-                    g.DrawText(l.Text, x + pad, cy + 4.0f * s, Color.FromArgb(255, 140, 180, 255), font);
+                    g.DrawText(l.Text, x + pad, cy + 4.0f * s, HeaderColor, font);
                 }
                 else
                 {
-                    Entry en = entries[l.EntryIndex];
-                    bool sel = l.EntryIndex == selected;
-                    if (sel)
-                        g.DrawRectangle(x + w / 2, cy + rowH / 2, w - pad, rowH, Color.FromArgb(200, 240, 200, 80));
-                    Color c = sel ? Color.Black : Color.White;
-                    string text = en.Label;
-                    if (en.IsHotkeySetting && capturingHotkey) text = "Press a new key...  (click to cancel)";
-                    g.DrawText((sel ? "> " : "  ") + text, x + pad, cy + 2.0f * s, c, font);
-                    if (!en.IsHotkeySetting)
-                        g.DrawText(PlausiblePosition(en.Position) ? FormatDistance(en.Distance) : "--",
-                            new RectangleF(x, cy + 2.0f * s, w - pad, rowH), GTA.TextAlignment.Right, c, font);
+                    Entry en = v.Entries[l.EntryIndex];
+                    bool isSel = l.EntryIndex == sel;
+                    if (isSel)
+                        g.DrawRectangle(x + w / 2, cy + rowH / 2, w - pad, rowH, HighlightColor);
+                    Color c = isSel ? Color.Black : Color.White;
+                    string text = en.IsHotkeySetting && capturingHotkey ? "Press a new key...  (click to cancel)" : en.Label;
+                    g.DrawText((isSel ? "> " : "  ") + text, x + pad, cy + 2.0f * s, c, font);
+                    if (en.DistanceText != null)
+                        g.DrawText(en.DistanceText, new RectangleF(x, cy + 2.0f * s, w - pad, rowH), GTA.TextAlignment.Right, c, font);
                 }
                 cy += rowH;
             }
 
             if (first > 0)
                 g.DrawText("^", x + w - pad * 2, y + pad + titleH - rowH * 0.6f, Color.Gray, font);
-            if (first + shown < lines.Count)
+            if (first + shown < count)
                 g.DrawText("v", x + w - pad * 2, cy - 4.0f * s, Color.Gray, font);
 
-            g.DrawText("Scroll: select   Left click: go   Right click: close" + (HookActive() ? "" : "   [fallback input]"),
-                x + pad, cy + pad / 2, Color.FromArgb(255, 170, 170, 170), hintFont);
+            g.DrawText(HookActive() ? FooterText : FooterText + "   [fallback input]", x + pad, cy + pad / 2, HintColor, hintFont);
         }
+
+        const string FooterText = "Scroll: select   Left click: go   Right click: close";
     }
 
     // Hides the mouse buttons and wheel from the game while the menu is open.
@@ -1036,7 +1087,8 @@ namespace QuickGPS
         readonly IntPtr stateThunk, dataThunk;
 
         System.Threading.Timer watchdog;
-        bool initialised, patched;
+        bool initialised;
+        volatile bool patched;
         public volatile bool Failed;
         volatile bool collecting;   // false = menu closed, just keep the buttons hidden
         long lastPing;
@@ -1080,6 +1132,8 @@ namespace QuickGPS
 
         public void Start()
         {
+            collecting = true;
+            if (patched || Failed) return;   // called every frame while the menu is open
             lock (gate)
             {
                 collecting = true;
@@ -1112,11 +1166,9 @@ namespace QuickGPS
 
         public void Stop()
         {
-            lock (gate)
-            {
-                Interlocked.Exchange(ref lastPing, 0);
-                Restore();
-            }
+            Interlocked.Exchange(ref lastPing, 0);
+            if (!patched) return;
+            lock (gate) Restore();
         }
 
         void Restore()

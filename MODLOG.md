@@ -88,3 +88,13 @@ ScriptHookDotNet (C#), **Tomasak's CE fork** (github.com/Tomasak/gta4_scripthook
   "GPS: <place> <distance> <ahead/left/...>" from Game.CurrentCamera.Direction, computed in the tick, drawn top-left.
 - [ ] Retest: pick LJ/Faustin, get in a car → route line? On foot → yellow marker on radar + hint.
 - Back up saves first: `%USERPROFILE%\Documents\Rockstar Games\GTA IV\savegames`.
+
+## v1.0.0 release prep (2026-10-16)
+- User confirmed everything works in game (yellow marker routing, hint, hold-to-open 1 s, click blocking).
+- Optimizations: full blip scan (256 sprite queries) only on open + every 3 s; 250 ms distance refresh from known blips;
+  menu rows/distance strings precomputed into an immutable MenuView swapped in by the tick (draw reads only);
+  route hint/arrival every 100 ms instead of every frame; Environment.TickCount instead of DateTime.Now;
+  MouseBlocker.Start lock-free fast path, Stop no-op when unpatched; removed dead "route on game blip" code; fonts set up once.
+- Tests outside game: DirectInput filter test with the real build; 14 logic checks (sorting, selection follow, line map,
+  empty map, direction words, timer) against the stub API. All passed.
+- Added AssemblyVersion 1.0.0, package.ps1 (zip with "/" entry paths), README rewritten for public release with credits.
