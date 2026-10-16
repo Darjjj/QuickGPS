@@ -1,11 +1,15 @@
 # Builds the release zip: dist\QuickGPS-v<version>.zip, laid out to extract straight into the GTAIV folder.
-# Usage: powershell -ExecutionPolicy Bypass -File package.ps1 [-GameDir "C:\...\GTAIV"]
-param([string]$GameDir = "C:\Steam\steamapps\common\Grand Theft Auto IV\GTAIV")
+# Usage: powershell -ExecutionPolicy Bypass -File package.ps1 [-GameDir "C:\...\GTAIV"] [-NoBuild]
+# -NoBuild packages scripts\QuickGPS.net.dll as it is (e.g. the exact build that was tested in game);
+# a rebuild produces a byte-different DLL.
+param([string]$GameDir = "C:\Steam\steamapps\common\Grand Theft Auto IV\GTAIV", [switch]$NoBuild)
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 
-& cmd /c "`"$root\build.cmd`" `"$GameDir`""
-if ($LASTEXITCODE -ne 0) { throw "build failed" }
+if (-not $NoBuild) {
+    & cmd /c "`"$root\build.cmd`" `"$GameDir`""
+    if ($LASTEXITCODE -ne 0) { throw "build failed" }
+}
 
 $dll = Join-Path $root "scripts\QuickGPS.net.dll"
 $version = ([Reflection.AssemblyName]::GetAssemblyName($dll)).Version.ToString(3)
