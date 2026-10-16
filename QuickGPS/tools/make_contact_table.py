@@ -61,6 +61,22 @@ def to_game(p, c):
     return (c[0] * p[0] + c[1] * p[1] + c[2], c[3] * p[0] + c[4] * p[1] + c[5])
 
 
+def merge(points):
+    """Merges a character's stacked markers (several missions a few metres apart) into one point per place."""
+    merged = []
+    for ep, name, x, y in points:
+        for m in merged:
+            if m[0] == ep and m[1] == name and math.dist((m[2], m[3]), (x, y)) < MERGE_M:
+                m[4].append((x, y))
+                break
+        else:
+            merged.append([ep, name, x, y, [(x, y)]])
+    out = []
+    for ep, name, _, _, pts in merged:
+        out.append((ep, name, sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)))
+    return sorted(out)
+
+
 def main():
     coef, max_err = fit()
     print("fit on %d anchors, max error %.0f m" % (sum(len(v) for v in GAME.values()), max_err))
@@ -69,7 +85,7 @@ def main():
     if max_err > 25:
         raise SystemExit("fit too loose, not writing")
 
-    areas, givers = [], []
+    areas, givers, randoms = [], [], []
     with open(os.path.join(HERE, "mapgenie_points.txt"), encoding="utf-8") as f:
         for line in f:
             if line.startswith("#") or not line.strip():
@@ -80,24 +96,13 @@ def main():
                 name = NAME_FIXES.get(name, name)
                 if tag == "N":
                     areas.append((name, x, y))
+                elif tag == "R":
+                    randoms.append(("ANY", name, x, y))
                 else:
-                    givers.append(("TLAD" if tag == "L" else "TBoGT", name, x, y))
+                    givers.append(({"L": "TLAD", "T": "TBoGT", "G": "GTAIV"}[tag], name, x, y))
 
-    # Merge each giver's stacked markers into one point per place.
-    merged = []
-    for ep, name, x, y in givers:
-        for m in merged:
-            if m[0] == ep and m[1] == name and math.dist((m[2], m[3]), (x, y)) < MERGE_M:
-                m[4].append((x, y))
-                break
-        else:
-            merged.append([ep, name, x, y, [(x, y)]])
-    places = []
-    for ep, name, _, _, pts in merged:
-        cx = sum(p[0] for p in pts) / len(pts)
-        cy = sum(p[1] for p in pts) / len(pts)
-        places.append((ep, name, cx, cy))
-    places.sort()
+    places = merge(givers)
+    random_places = merge(randoms)
     areas.sort()
 
     lines = [
@@ -107,10 +112,15 @@ def main():
         "{",
         "    static class KnownPlaces",
         "    {",
-        "        // Episode, name, game X, game Y: where each Episodes from Liberty City mission giver's missions start.",
+        "        // Episode, name, game X, game Y: where each mission giver's missions start (GTAIV, TLAD, TBoGT).",
         "        public static readonly KnownPlace[] MissionGivers = new KnownPlace[] {",
     ]
     for ep, name, x, y in places:
+        lines.append('            new KnownPlace("%s", "%s", %.0ff, %.0ff),' % (ep, name, x, y))
+    lines += ["        };", "",
+              "        // Random characters (Stranger blips). Map Genie doesn't say which episode, so they match in all.",
+              "        public static readonly KnownPlace[] RandomCharacters = new KnownPlace[] {"]
+    for ep, name, x, y in random_places:
         lines.append('            new KnownPlace("%s", "%s", %.0ff, %.0ff),' % (ep, name, x, y))
     lines += ["        };", "", "        // Neighbourhood label positions, for naming the area a contact is in.",
               "        public static readonly KnownPlace[] Areas = new KnownPlace[] {"]
@@ -122,7 +132,8 @@ def main():
               "        {", "            Episode = episode; Name = name; X = x; Y = y;", "        }", "    }", "}", ""]
     with open(OUT, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
-    print("wrote %d mission-giver places and %d areas to %s" % (len(places), len(areas), os.path.relpath(OUT)))
+    print("wrote %d mission-giver places, %d random-character places and %d areas to %s"
+          % (len(places), len(random_places), len(areas), os.path.relpath(OUT)))
 
 
 if __name__ == "__main__":

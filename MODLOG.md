@@ -127,3 +127,7 @@ ScriptHookDotNet (C#), **Tomasak's CE fork** (github.com/Tomasak/gta4_scripthook
   -> tools/make_contact_table.py (affine fit, merges a giver's stacked markers within 40 m) -> src/KnownPlaces.cs
   (25 giver places, 66 areas). Unknown Contact blips: nearest same-episode giver within 60 m, else "Contact (<area>)".
   build.cmd now compiles src\*.cs in %TEMP%\qgps-build\src. 7 naming checks pass against the stub API.
+- Main game too: Map Genie "Mission" (88 with quest giver, 22 characters) tagged G/GTAIV and "Random Encounter" (31,
+  episode not given -> "ANY"). Generic icons get a specific name within 60 m: Person_Male/Female -> RandomCharacters,
+  Person_Unknown/Misc_Boss -> MissionGivers; otherwise the generic label stays. Table: 70 giver places, 31 random, 66 areas.
+  Real-data check: the "Stranger (male)" at (863,-558) from the first dump resolves to Brian Meech (early-game encounter).

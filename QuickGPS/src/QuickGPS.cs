@@ -792,18 +792,49 @@ namespace QuickGPS
             catch { return "Contact #" + icon; }
             if (!PlausiblePosition(pos)) return "Contact #" + icon;
 
-            KnownPlace best = null;
-            float bestD = MissionGiverMatchM;
-            foreach (KnownPlace k in KnownPlaces.MissionGivers)
-            {
-                if (k.Episode != currentEpisode) continue;
-                float d = Distance2D(pos, k.X, k.Y);
-                if (d < bestD) { bestD = d; best = k; }
-            }
-            if (best != null) return best.Name;
+            string name = NearestName(KnownPlaces.MissionGivers, pos);
+            if (name != null) return name;
 
             string area = NearestArea(pos);
             return area != null ? "Contact (" + area + ")" : "Contact #" + icon;
+        }
+
+        // Generic icons (strangers, "?" contacts, bosses) say what kind of contact it is but not who.
+        // Name them after the nearest matching known place, or return null to keep the generic label.
+        static string SpecificName(Blip b, BlipIcon icon)
+        {
+            KnownPlace[] list;
+            switch (icon)
+            {
+                case BlipIcon.Person_Male:
+                case BlipIcon.Person_Female:
+                    list = KnownPlaces.RandomCharacters;
+                    break;
+                case BlipIcon.Person_Unknown:
+                case BlipIcon.Misc_Boss:
+                    list = KnownPlaces.MissionGivers;
+                    break;
+                default:
+                    return null;
+            }
+            Vector3 pos;
+            try { pos = b.Position; }
+            catch { return null; }
+            return PlausiblePosition(pos) ? NearestName(list, pos) : null;
+        }
+
+        // Name of the nearest place for this episode (or any episode) within MissionGiverMatchM, else null.
+        static string NearestName(KnownPlace[] list, Vector3 pos)
+        {
+            KnownPlace best = null;
+            float bestD = MissionGiverMatchM;
+            foreach (KnownPlace k in list)
+            {
+                if (k.Episode != currentEpisode && k.Episode != "ANY") continue;
+                float d = Distance2D(pos, k.X, k.Y);
+                if (d < bestD) { bestD = d; best = k; }
+            }
+            return best != null ? best.Name : null;
         }
 
         static string NearestArea(Vector3 pos)
@@ -841,6 +872,8 @@ namespace QuickGPS
             if (MissionLabels.TryGetValue(icon, out label))
             {
                 isMission = true;
+                string specific = SpecificName(b, icon);
+                if (specific != null) label = specific;
                 return true;
             }
             if (ServiceLabels.TryGetValue(icon, out label))
