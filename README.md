@@ -2,6 +2,10 @@
 
 **Download:** [Nexus Mods](https://www.nexusmods.com/gta4/mods/1568) · [GitHub releases](https://github.com/Darjjj/QuickGPS/releases/latest)
 
+https://github.com/user-attachments/assets/03403113-1d76-4a25-851e-cadb427409fd
+
+Also on [YouTube](https://youtu.be/Rcf8HrFTgCk).
+
 A quick GPS for GTA IV. Hold **Tab** for a second and a panel opens in the top-left corner listing:
 
 - **Mission givers:** every contact on the map (Roman, Little Jacob, Brucie, strangers, assassination jobs and so on), nearest first.
